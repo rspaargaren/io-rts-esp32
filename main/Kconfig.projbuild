@@ -1,0 +1,92 @@
+menu "IO RTS Project Configuration"
+    menuconfig ENABLE_IOHOMECONTROL
+        bool "Enable IO-Homecontrol"
+        default y
+
+    menu "IO Configuration"
+        depends on ENABLE_IOHOMECONTROL
+
+        config IOHOMECONTROL_LOGGING_ENABLED
+            bool "Enable logging in IO-HomeControl layer"
+            default y
+
+        config IOHOMECONTROL_PASSIVE_MODE
+            bool "Passive only (not allowed to emit)"
+            default y
+
+        config IOHOMECONTROL_DEFAULT_KEY
+            string "IO System key (16 bytes)"
+            default 00112233445566778899AABBCCDDEEFF
+            help
+                Default system key if not changed by configuration later (16 bytes)
+        
+        config IOHOMECONTROL_DEFAULT_NODEID
+            string "IO Node ID (3 bytes)"
+            default 112233
+            help
+                Default Node ID if not changed by configuration later (3 bytes)
+
+        config IOHOMECONTROL_DEFAULT_TX_POWER
+            int "TX Power (dBm)"
+            range 0 20
+            default 20
+            help
+                Default Tx power in dBm (0-20)
+
+        choice IOHOMECONTROL_SX1276_SPI_HOST
+            prompt "Choose SPI_HOST to use"
+            default IOHOMECONTROL_SX1276_SPI_HOST3 if SOC_SPI_PERIPH_NUM > 2
+            default IOHOMECONTROL_SX1276_SPI_HOST2
+
+            config IOHOMECONTROL_SX1276_SPI_HOST2
+                bool "SPI_HOST2"
+            
+            config IOHOMECONTROL_SX1276_SPI_HOST3
+                bool "SPI_HOST3"
+                depends on SOC_SPI_PERIPH_NUM > 2
+        endchoice
+        
+        config IOHOMECONTROL_SX1276_SPI_MOSI
+            int "SPI MOSI GPIO Num"
+            default 6
+            help
+                GPIO number for SPI MOSI pin connected to SX1276 radio module.
+
+        config IOHOMECONTROL_SX1276_SPI_MISO
+            int "SPI MISO GPIO Num"
+            default 3
+            help
+                GPIO number for SPI MISO pin connected to SX1276 radio module.
+
+        config IOHOMECONTROL_SX1276_SPI_SCK
+            int "SPI SCK GPIO Num"
+            default 5
+            help
+                GPIO number for SPI SCK pin connected to SX1276 radio module.
+
+        config IOHOMECONTROL_SX1276_SPI_CS
+            int "SPI CS GPIO Num"
+            default 7
+            help
+                GPIO number for SPI CS pin connected to SX1276 radio module.
+
+        config IOHOMECONTROL_SX1276_RST
+            int "RST GPIO Num"
+            default 8
+            help
+                GPIO number for RST pin connected to SX1276 radio module.
+
+        config IOHOMECONTROL_SX1276_DIO0
+            int "DIO0 GPIO Num"
+            default 9
+            help
+                GPIO number for DIO0 pin connected to SX1276 radio module.
+
+        config IOHOMECONTROL_SX1276_DIO4
+            int "DIO4 GPIO Num"
+            default 10
+            help
+                GPIO number for DIO4 pin connected to SX1276 radio module.
+    endmenu
+
+endmenu
