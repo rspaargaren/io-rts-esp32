@@ -20,6 +20,7 @@
 #include <iostream>
 #include <iomanip>
 #include <format>
+#include <mutex>
 
 static const char *TAG = "io-hctrl";
 
@@ -67,7 +68,8 @@ namespace iohome
   static SemaphoreHandle_t sMutex;                                 // Mutex to use when accessing IO queues
   static StaticSemaphore_t sMutexBuffer;                           // Memory allocated staticly to the mutex (allocation cannot fail at runtime)
   static std::map<std::string, IoDevice> sDeviceMap;               // Map of all known devices
-  static std::map<std::string, std::list<std::string>> sRemoteMap; // Map of remotes and the devices they control
+  static std::map<std::string, std::list<std::string>> sRemoteMap; // Map of remotes and the devices they control, protected by sRemoteMapMutex
+  static std::mutex sRemoteMapMutex;                               // Mutex to protect sRemoteMap
   static LoggerCallback sLoggerCallback;                           // Callback to send logs to
   static UpdatedDeviceCallback sDeviceStatusCallback;              // Callback to send device status updates to
 
@@ -180,7 +182,7 @@ namespace iohome
       IoDevice device;
       if (xQueueReceive(sIoDeviceStatusQueue, &device, portMAX_DELAY))
       {
-        if (sDeviceStatusCallback)
+        if (sDeviceStatusCallback && !device.is_deleted) // we have a callback and device is not marked deleted
         {
           sDeviceStatusCallback(buffToHexString(NODE_ID_SIZE, device.info.node_id), device);
         }
@@ -591,6 +593,7 @@ namespace iohome
             break;
           default: // is it a known remote?
           {
+            std::lock_guard<std::mutex> guard(sRemoteMapMutex); // Take mutex! It will be released when quitting the scope (before break statement)
             std::map<std::string, std::list<std::string>>::iterator it = sRemoteMap.find(srcDevice);
             if (it != sRemoteMap.end())
             {
@@ -625,8 +628,9 @@ namespace iohome
       {
         for (std::map<std::string, IoDevice>::iterator it = sDeviceMap.begin(); it != sDeviceMap.end(); it++)
         {
-          if ((esp_timer_get_time() > it->second.last_status_timestamp + STATUS_UPDATE_MAX_TIME_US) // previous update is a long time ago
-              || (it->second.next_status_update_timestamp < esp_timer_get_time()))                  // or we know that we should update due to previous status received
+          if (!it->second.is_deleted &&                                                              // device is not marked deleted and
+              ((esp_timer_get_time() > it->second.last_status_timestamp + STATUS_UPDATE_MAX_TIME_US) // previous update is a long time ago
+               || (it->second.next_status_update_timestamp < esp_timer_get_time())))                 // or we know that we should update due to previous status received
           {
             if (strlen(it->second.info.name) == 0) // at init
             {
@@ -670,18 +674,42 @@ namespace iohome
 
   void IoHomeControl::AddDevice(const std::string &tmpDeviceID)
   {
-    std::string deviceID = tmpDeviceID;
-    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+    std::string deviceID(tmpDeviceID.length(), '0'); // init avoiding C++ 3133 warning
+    std::transform(tmpDeviceID.begin(), tmpDeviceID.end(), deviceID.begin(), [](unsigned char c)
                    { return std::toupper(c); }); // convert to uppercase
     if (!sDeviceMap.contains(deviceID))
     {
       IoDevice device;
       memset(&device, 0, sizeof(IoDevice));
       device.is_stopped = true;
+      device.is_deleted = false;
       device.position = UNKNOWN_POSITION;
       device.target = UNKNOWN_POSITION;
       HexStringToBuff(deviceID, device.info.node_id, NODE_ID_SIZE);
       sDeviceMap.insert({deviceID, device});
+    }
+    else
+    {
+      auto it = sDeviceMap.find(deviceID); // we always have something in this 'else'
+      if (it->second.is_deleted)           // the device was previously deleted with no reboot, "undelete" it
+      {
+        it->second.is_deleted = false;
+        // force update
+        it->second.last_status_timestamp = 0;
+        it->second.next_status_update_timestamp = 0;
+      }
+    }
+  }
+
+  void IoHomeControl::DeleteDevice(const std::string &tmpDeviceID)
+  {
+    std::string deviceID(tmpDeviceID.length(), '0'); // init avoiding C++ 3133 warning
+    std::transform(tmpDeviceID.begin(), tmpDeviceID.end(), deviceID.begin(), [](unsigned char c)
+                   { return std::toupper(c); }); // convert to uppercase
+    auto it = sDeviceMap.find(deviceID);
+    if (it != sDeviceMap.end())
+    {
+      it->second.is_deleted = true;
     }
   }
 
@@ -819,6 +847,11 @@ namespace iohome
       IO_LOGE("SetDevicePosition: no device found in list!");
       return false;
     }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("SetDevicePosition: device is marked as deleted, add it before using it!");
+      return false;
+    }
     if (isDeviceOpenCloseOnly(deviceID) && position != 0 && position != 100)
     {
       IO_LOGE("SetDevicePosition: This device ({}) doesn't support this command!", deviceID);
@@ -870,6 +903,11 @@ namespace iohome
       IO_LOGE("SetDeviceName: no device found in list!");
       return false;
     }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("SetDeviceName: device is marked as deleted, add it before using it!");
+      return false;
+    }
     IO_LOGI("Setting device name to {}", name);
     if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
     {
@@ -919,7 +957,12 @@ namespace iohome
     std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
     if (it == sDeviceMap.end())
     {
-      IO_LOGE("SetDeviceName: no device found in list!");
+      IO_LOGE("ForceDeviceStatusUpdate: no device found in list!");
+      return false;
+    }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("ForceDeviceStatusUpdate: device is marked as deleted, add it before using it!");
       return false;
     }
     it->second.next_status_update_timestamp = 0;
@@ -974,6 +1017,10 @@ namespace iohome
 
   bool IoHomeControl::LinkRemoteToDevice(const std::string &remoteID, const std::string &deviceID)
   {
+    auto it = sDeviceMap.find(deviceID);
+    if (it == sDeviceMap.end() || it->second.is_deleted) // unknown device or device is deleted!
+      return false;
+    std::lock_guard<std::mutex> guard(sRemoteMapMutex); // Take mutex! It will be released when quitting the scope (when returning)
     if (!sRemoteMap.contains(remoteID))
     {
       sRemoteMap.insert({remoteID, {deviceID}});
@@ -994,6 +1041,12 @@ namespace iohome
         return false;
     }
     return true;
+  }
+
+  void IoHomeControl::DeleteRemote(const std::string &remoteID)
+  {
+    std::lock_guard<std::mutex> guard(sRemoteMapMutex); // Take mutex! It will be released when quitting the scope (when returning)
+    sRemoteMap.erase(remoteID);
   }
 
   bool IoHomeControl::TransmitFrame(const IoFrame &ioframe, uint32_t frequency)
@@ -1151,6 +1204,10 @@ namespace iohome
       }
     }
     std::map<std::string, IoDevice>::iterator deviceIt = sDeviceMap.find(srcDevice);
+    if (deviceIt->second.is_deleted) // don't update device marked as deleted
+    {
+      return;
+    }
     switch (statusFrame.command_id)
     {
     case CMD_GET_NAME_RESPONSE:
@@ -1230,7 +1287,8 @@ namespace iohome
           {
             deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_NEXT_TRY_US; // missing info, retry later
           }
-          else deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_MAX_TIME_US; // everything is OK, no update required
+          else
+            deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_MAX_TIME_US; // everything is OK, no update required
         }
         else
         {
@@ -1293,7 +1351,8 @@ namespace iohome
           {
             deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_NEXT_TRY_US; // missing info, retry later
           }
-          else deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_MAX_TIME_US; // everything is OK, no update required
+          else
+            deviceIt->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_MAX_TIME_US; // everything is OK, no update required
         }
         else
         {

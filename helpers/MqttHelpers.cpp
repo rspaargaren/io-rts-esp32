@@ -47,7 +47,7 @@ namespace Helpers
             std::string topic = mqttHelper->GetTopicPrefix() + MQTT_CLIENT_BIRTH_WILL_TOPIC;
             const char *data = MQTT_CLIENT_BIRTH_MSG.c_str();
             msg_id = esp_mqtt_client_publish(client, topic.c_str(), data, 0, 0, 1);
-            ESP_LOGE(TAG, "sent publish successful, msg_id=%d", msg_id);
+            ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
             // Send discovery
             mqttHelper->SendDiscovery();
             // subscribe to all command topics
@@ -339,50 +339,58 @@ namespace Helpers
                             {
                                 // https://www.home-assistant.io/integrations/cover.mqtt/
                                 device_plateform = "cover";
-                                error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 100) == NULL);                                  // position_closed
-                                error = error || (cJSON_AddNumberToObject(cmp, "position_open", 0) == NULL);                                      // position_open
-                                error = error || (cJSON_AddStringToObject(cmp, "position_topic", device_position_topic.c_str()) == NULL);         // position_topic
-                                error = error || (cJSON_AddStringToObject(cmp, "set_position_topic", device_cmd_position_topic.c_str()) == NULL); // set_position_topic
-                                // add device_class https://www.home-assistant.io/integrations/cover/#device_class
-                                std::string type = "shutter";
-                                switch (it->second.info.device_type)
+                                if (!it->second.is_deleted)
                                 {
-                                case DeviceType::VENETIAN_BLIND:
-                                case DeviceType::BLIND:
-                                case DeviceType::EXTERNAL_VENETIAN_BLIND:
-                                case DeviceType::LOUVRE_BLIND:
-                                    type = "blind";
-                                    break;
-                                case DeviceType::ROLLER_SHUTTER:
-                                case DeviceType::DUAL_SHUTTER:
-                                case DeviceType::SWINGING_SHUTTER:
-                                    type = "shutter";
-                                    break;
-                                case DeviceType::AWNING:
-                                case DeviceType::HORIZONTAL_AWNING:
-                                    type = "awning";
-                                    break;
-                                case DeviceType::WINDOW_OPENER:
-                                    type = "window";
-                                    break;
-                                case DeviceType::GARAGE_OPENER:
-                                    type = "garage";
-                                    break;
-                                case DeviceType::GATE_OPENER:
-                                    type = "gate";
-                                    break;
-                                case DeviceType::ROLLING_DOOR_OPENER:
-                                    type = "door";
-                                    break;
-                                case DeviceType::CURTAIN_TRACK:
-                                    type = "curtain";
-                                    break;
-                                default:
-                                    type = "None";
-                                    break;
+                                    // add attributes only if not deleted
+                                    error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 100) == NULL);                                  // position_closed
+                                    error = error || (cJSON_AddNumberToObject(cmp, "position_open", 0) == NULL);                                      // position_open
+                                    error = error || (cJSON_AddStringToObject(cmp, "position_topic", device_position_topic.c_str()) == NULL);         // position_topic
+                                    error = error || (cJSON_AddStringToObject(cmp, "set_position_topic", device_cmd_position_topic.c_str()) == NULL); // set_position_topic
+                                    // add device_class https://www.home-assistant.io/integrations/cover/#device_class
+                                    std::string type = "shutter";
+                                    switch (it->second.info.device_type)
+                                    {
+                                    case DeviceType::VENETIAN_BLIND:
+                                    case DeviceType::BLIND:
+                                    case DeviceType::EXTERNAL_VENETIAN_BLIND:
+                                    case DeviceType::LOUVRE_BLIND:
+                                        type = "blind";
+                                        break;
+                                    case DeviceType::ROLLER_SHUTTER:
+                                    case DeviceType::DUAL_SHUTTER:
+                                    case DeviceType::SWINGING_SHUTTER:
+                                        type = "shutter";
+                                        break;
+                                    case DeviceType::AWNING:
+                                    case DeviceType::HORIZONTAL_AWNING:
+                                        type = "awning";
+                                        break;
+                                    case DeviceType::WINDOW_OPENER:
+                                        type = "window";
+                                        break;
+                                    case DeviceType::GARAGE_OPENER:
+                                        type = "garage";
+                                        break;
+                                    case DeviceType::GATE_OPENER:
+                                        type = "gate";
+                                        break;
+                                    case DeviceType::ROLLING_DOOR_OPENER:
+                                        type = "door";
+                                        break;
+                                    case DeviceType::CURTAIN_TRACK:
+                                        type = "curtain";
+                                        break;
+                                    default:
+                                        type = "None";
+                                        break;
+                                    }
+                                    error = error || (cJSON_AddStringToObject(cmp, "device_class", type.c_str()) == NULL); // device_class
+                                    // TODO: add "favorite position" button
                                 }
-                                error = error || (cJSON_AddStringToObject(cmp, "device_class", type.c_str()) == NULL); // device_class
-                                // TODO: add "favorite position" button
+                                else
+                                {
+                                    // TODO: remove "favorite position" button
+                                }
                                 break;
                             }
                             case DeviceType::LIGHT:
@@ -413,11 +421,16 @@ namespace Helpers
                                 ESP_LOGE(TAG, "Failed to add device to MQTT discovery: type not managed! (%d)", it->second.info.device_type);
                                 break;
                             }
-                            error = error || (cJSON_AddStringToObject(cmp, "p", device_plateform.c_str()) == NULL);             // platform
-                            error = error || (cJSON_AddStringToObject(cmp, "unique_id", device_id.c_str()) == NULL);            // unique_id
-                            error = error || (cJSON_AddStringToObject(cmp, "name", it->second.info.name) == NULL);              // name
-                            error = error || (cJSON_AddStringToObject(cmp, "command_topic", device_cmd_topic.c_str()) == NULL); // command_topic
-                            error = error || (cJSON_AddStringToObject(cmp, "state_topic", device_state_topic.c_str()) == NULL); // state_topic
+                            // add 'platform' even if device is deleted to inform Home Assistant that this component is deleted
+                            error = error || (cJSON_AddStringToObject(cmp, "p", device_plateform.c_str()) == NULL); // platform
+                            if (!it->second.is_deleted)
+                            {
+                                // add attributes only if not deleted
+                                error = error || (cJSON_AddStringToObject(cmp, "unique_id", device_id.c_str()) == NULL);            // unique_id
+                                error = error || (cJSON_AddStringToObject(cmp, "name", it->second.info.name) == NULL);              // name
+                                error = error || (cJSON_AddStringToObject(cmp, "command_topic", device_cmd_topic.c_str()) == NULL); // command_topic
+                                error = error || (cJSON_AddStringToObject(cmp, "state_topic", device_state_topic.c_str()) == NULL); // state_topic
+                            }
                         }
                     }
                     // Mutex automatically released!
@@ -457,6 +470,13 @@ namespace Helpers
             std::string stateTopic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + device->first + MQTT_CLIENT_STATE_TOPIC;
             std::string positionTopic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + device->first + MQTT_CLIENT_POSITION_TOPIC;
             std::string data;
+            if (device->second.is_deleted)
+            {
+                // device is marked as deleted, send empty messages to remove all retained messages for this device
+                esp_mqtt_client_publish(mMqttClientHandle, stateTopic.c_str(), NULL, 0, 0, 1);
+                esp_mqtt_client_publish(mMqttClientHandle, positionTopic.c_str(), NULL, 0, 0, 1);
+                return;
+            }
             switch (device->second.info.device_type)
             {
             case DeviceType::VENETIAN_BLIND:

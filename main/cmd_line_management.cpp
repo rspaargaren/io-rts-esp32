@@ -12,6 +12,7 @@
 using namespace Config;
 
 static const char *TAG = "cmdline_mngt";
+static IoRts::IoRtsManager *sIoRtsManager;
 static iohome::IoHomeControl *sIoHome;
 
 // ******************* IO DISCOVER ********************
@@ -77,6 +78,47 @@ void register_ioadd(void)
         .context = NULL};
 
     ESP_ERROR_CHECK(esp_console_cmd_register(&ioadd_cmd));
+}
+
+// ******************* IO REMOVE ********************
+
+/// @brief Structure used by the 'io_remove' command
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} ioremove_args;
+
+static int do_ioremove_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&ioremove_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, ioremove_args.end, argv[0]);
+        return 1;
+    }
+    std::string deviceID(ioremove_args.device_id->sval[0]);
+    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                   { return std::toupper(c); }); // convert to uppercase
+    sIoRtsManager->RemoveIoDevice(deviceID);
+    return 0;
+}
+
+void register_ioremove(void)
+{
+    ioremove_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device, 3 bytes (eg 112233)");
+    ioremove_args.end = arg_end(1);
+
+    const esp_console_cmd_t ioremove_cmd = {
+        .command = "io_remove",
+        .help = "Remove an already added IO-HomeControl device",
+        .hint = NULL,
+        .func = &do_ioremove_cmd,
+        .argtable = &ioremove_args,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&ioremove_cmd));
 }
 
 // ******************* IO OPEN ********************
@@ -372,7 +414,13 @@ static int do_iolinkremote_cmd(int argc, char **argv)
         arg_print_errors(stderr, iolinkremote_args.end, argv[0]);
         return 1;
     }
-    sIoHome->LinkRemoteToDevice(iolinkremote_args.remote_id->sval[0], iolinkremote_args.device_id->sval[0]);
+    std::string remoteID(iolinkremote_args.remote_id->sval[0]);
+    std::string deviceID(iolinkremote_args.device_id->sval[0]);
+    std::transform(remoteID.begin(), remoteID.end(), remoteID.begin(), [](unsigned char c)
+                   { return std::toupper(c); }); // convert to uppercase
+    std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                   { return std::toupper(c); }); // convert to uppercase
+    sIoRtsManager->LinkRemoteToDevice(remoteID, deviceID);
     return 0;
 }
 
@@ -394,13 +442,56 @@ void register_iolinkremote(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&iolinkremote_cmd));
 }
 
+// ******************* IO REMOVE REMOTE ********************
+
+/// @brief Structure used by the 'io_removeremote' command
+static struct
+{
+    struct arg_str *remote_id;
+    struct arg_end *end;
+} ioremoveremote_args;
+
+static int do_ioremoveremote_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&ioremoveremote_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, ioremoveremote_args.end, argv[0]);
+        return 1;
+    }
+    std::string remoteID(ioremoveremote_args.remote_id->sval[0]);
+    std::transform(remoteID.begin(), remoteID.end(), remoteID.begin(), [](unsigned char c)
+                   { return std::toupper(c); }); // convert to uppercase
+    sIoRtsManager->RemoveIoRemote(remoteID);
+    return 0;
+}
+
+void register_ioremoveremote(void)
+{
+    ioremoveremote_args.remote_id = arg_str1(NULL, NULL, "<remoteid>", "ID of the remote, 3 bytes (eg AABBCC)");
+    ioremoveremote_args.end = arg_end(1);
+
+    const esp_console_cmd_t ioremoveremote_cmd = {
+        .command = "io_removeremote",
+        .help = "Remove an IO remote",
+        .hint = NULL,
+        .func = &do_ioremoveremote_cmd,
+        .argtable = &ioremoveremote_args,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&ioremoveremote_cmd));
+}
+
 // ******************* IO Register commands ********************
 
-void register_io_cmdline_tools(iohome::IoHomeControl *io_home)
+void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
 {
-    sIoHome = io_home;
+    sIoRtsManager = io_rts_manager;
+    sIoHome = io_rts_manager->mIoHome;
     register_iodiscover();
     register_ioadd();
+    register_ioremove();
     register_ioopen();
     register_ioclose();
     register_iostop();
@@ -409,6 +500,7 @@ void register_io_cmdline_tools(iohome::IoHomeControl *io_home)
     register_ioupdate();
     register_iosetname();
     register_iolinkremote();
+    register_ioremoveremote();
 }
 
 // ******************* REBOOT ********************

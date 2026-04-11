@@ -97,6 +97,10 @@ namespace iohome
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     void AddDevice(const std::string &deviceID);
 
+    /// @brief Delete 2W device from controller
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    void DeleteDevice(const std::string &deviceID);
+
     /// @brief Start device discovery and pair any discovered device
     bool DiscoverAndPairDevice();
 
@@ -159,6 +163,10 @@ namespace iohome
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     /// @return true if success, false if failed (unknown device ID, ...)
     bool LinkRemoteToDevice(const std::string &remoteID, const std::string &deviceID);
+
+    /// @brief Delete a previously declared remote
+    /// @param remoteID Remote ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    void DeleteRemote(const std::string &remoteID);
 
   protected:
     uint8_t mOwnNodeId[NODE_ID_SIZE]; // Our NodeID (3 bytes)

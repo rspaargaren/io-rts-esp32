@@ -33,15 +33,17 @@ namespace IoRts
 
     static void deviceStatusCallback(const std::string deviceID, const iohome::IoDevice &device)
     {
-        ESP_LOGI(TAG, "Callback received device status for %s: %s (0x%02X/0x%02X) / Position %.1f / Target %0.1f / Moving: %s",
+        ESP_LOGI(TAG, "Callback received device status for %s: %s (0x%02X/0x%02X) / Position %.1f / Target %0.1f / Moving: %s / Deleted: %s",
                  deviceID.c_str(), device.info.name, device.info.device_type, device.info.device_subtype,
                  device.position, device.target,
-                 device.is_stopped ? "No" : "Yes");
+                 device.is_stopped ? "No" : "Yes", device.is_deleted ? "Yes" : "No");
         if (sIoRtsManager == nullptr)
             return;
-        if (!sIoRtsManager->isIoPassive()                                                                  // not passive mode
-            && (device.info.device_type != iohome::DeviceType::UNKNOWN) && (strlen(device.info.name) > 0)) // we have at least device name and type
+        if (!sIoRtsManager->isIoPassive()                                                                 // not passive mode
+            && (device.info.device_type != iohome::DeviceType::UNKNOWN) && (strlen(device.info.name) > 0) // we have at least device name and type
+            && (!device.is_deleted))                                                                      // device is not deleted
         {
+            bool sendDiscovery = false;
             // So we can process device status
             sIoRtsManager->mIoDevicesMutex.lock(); // Take mutex
             if (!sIoRtsManager->mIoDevices.contains(deviceID))
@@ -49,27 +51,42 @@ namespace IoRts
                 // We have a new device detected!
                 // add device to mIoDevices
                 sIoRtsManager->mIoDevices.insert({deviceID, device});
-                // TODO: add device to flash storage
-                sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as discovery needs it!
-                // send MQTT discovery message
-                if (sMqttHelper != nullptr)
-                    sMqttHelper->SendDiscovery();
+                // ask for discovery message
+                sendDiscovery = true;
+                // add device to flash storage
+                // TODO
             }
             else
             {
                 // update mIoDevices!
-                auto it = sIoRtsManager->mIoDevices.find(deviceID);                       // we have something as we found it just before
-                memcpy(it->second.info.name, device.info.name, sizeof(device.info.name)); // could be update by "SetName"
+                auto it = sIoRtsManager->mIoDevices.find(deviceID); // we have something as we found it just before
+                if (it->second.is_deleted)
+                {
+                    // revert 'deleted' status and send MQTT discovery as device has been added again
+                    sendDiscovery = true;
+                    it->second.is_deleted = false;
+                }
+                if (strcmp(it->second.info.name, device.info.name) != 0)
+                {
+                    sendDiscovery = true;
+                    memcpy(it->second.info.name, device.info.name, sizeof(device.info.name)); // could be update by "SetName"
+                }
                 it->second.is_stopped = device.is_stopped;
                 it->second.last_status_timestamp = device.last_status_timestamp;
                 it->second.next_status_update_timestamp = device.next_status_update_timestamp;
                 it->second.position = device.position;
                 it->second.target = device.target;
-                sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex!
             }
-            // send MQTT device status
+            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
+            // send MQTT messages
             if (sMqttHelper != nullptr)
+            {
+                // send MQTT discovery message
+                if (sendDiscovery)
+                    sMqttHelper->SendDiscovery();
+                // send status update
                 sMqttHelper->SendIoDeviceStatus(deviceID);
+            }
         }
     }
 #endif // ENABLE_IOHOMECONTROL
@@ -96,6 +113,57 @@ namespace IoRts
         if (mIoHome != nullptr)
             mIoHome->StopReceive();
         esp_restart();
+    }
+    void IoRtsManager::RemoveIoDevice(const std::string &deviceID)
+    {
+        sIoRtsManager->mIoDevicesMutex.lock(); // Take mutex
+        auto it = mIoDevices.find(deviceID);
+        if (it != mIoDevices.end())
+        {
+            if (it->second.is_deleted)
+            {
+                sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex
+                return;
+            }
+            // Remove from Io controller
+            if (mIoHome != nullptr)
+                mIoHome->DeleteDevice(deviceID);
+            // Update mIODevices
+            it->second.is_deleted = true;
+            // Remove from storage
+            // TODO
+            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
+            if (sMqttHelper != nullptr)
+            {
+                // send MQTT discovery message
+                sMqttHelper->SendDiscovery();
+                // delete retained topics
+                sMqttHelper->SendIoDeviceStatus(deviceID);
+            }
+        }
+        else
+        {
+            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex
+            ESP_LOGE(TAG, "RemoveIoDevice: unknown %s", deviceID.c_str());
+        }
+    }
+    bool IoRtsManager::LinkRemoteToDevice(const std::string &remoteID, const std::string &deviceID)
+    {
+        bool success = mIoHome->LinkRemoteToDevice(remoteID, deviceID);
+        if (success)
+        {
+            // Add remote to storage
+            // TODO
+        }
+        return success;
+    }
+    void IoRtsManager::RemoveIoRemote(const std::string &remoteID)
+    {
+        // Remove from Io controller
+        if (mIoHome != nullptr)
+            mIoHome->DeleteRemote(remoteID);
+        // Remove from storage
+        // TODO
     }
     void IoRtsManager::InitializeIo()
     {

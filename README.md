@@ -37,7 +37,7 @@ These features are currently available:
 - (S)NTP support for time synchronization
 - Front-end:
   - Command line permits to:
-    - Control IO devices: discover and pair, add, open, close, stop, set to favorite position, set to specific position (0-100%), change name inside device, link a remote to a device
+    - Control IO devices: discover and pair, add, open, close, stop, set to favorite position, set to specific position (0-100%), change name inside device, link a remote to a device, delete a device, delete a remote
     - Reboot ESP32
     - Change Wifi configuration without reflashing firmware (configuration applied after reboot)
     - Change DHCP/IPv4 configuration without reflashing firmware (configuration applied after reboot)
@@ -49,15 +49,15 @@ These features are currently available:
 - Configuration storage to flash
 
 These features should be available before end of 2026 depending on my available time:
+- Support SX1276 without DIO4 pin wired to ESP32 (expected April 2026 :calendar:)
+- Devices storage to flash (expected April 2026 :calendar:)
 - New features from command line (expected April 2026 :calendar:):
-  - Delete device / remote
   - Change IO-Homecontrol configuration (enable/disable logging, active/passive mode, change IO key, change NodeID, change Tx power) without reflashing firmware
 - MQTT (expected April-May 2026 :calendar:):
   - Add "Favorite position" button for devices based on position (shutter, blind, awning, window opener, garage opener, gate opener)
   - Discover / add / delete device
   - Link remote to device / delete remote
   - Configuration from MQTT (in addition to command line capability)
-- Devices storage to flash (expected April-May 2026 :calendar:)
 - ESP32 security features (expected April-June 2026 :calendar:, optional, enable if you want): flash encryption, secure boot, firmware signature
 - OTA sofware update (expected April-June 2026 :calendar:): update over Wifi/Ethernet, without flashing from USB, with rollback in case of failure
 - RTS protocol for legacy devices, based on CC1101 module (expected August-October 2026 :calendar:)
@@ -69,7 +69,7 @@ These features could be added, if useful:
 ### Hardware requirements
 In order to execute this project, you will need:
 - ESP32-S3 board
-- SX1276 radio module (it can be included on the ESP32 board)
+- SX1276 radio module (it can be included on the ESP32 board) with SPI (SCLK, MOSI, MISO, CS) and RST, DIO0 and DIO4 pins wired to ESP32.
 - Wires to connect the radio module to the board
 - USB cable to connect the board to your computer
 

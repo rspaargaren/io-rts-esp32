@@ -44,7 +44,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_console_new_repl_usb_serial_jtag(&usbjtag_config, &repl_config, &repl));
 #endif
 #ifdef CONFIG_ENABLE_IOHOMECONTROL
-    register_io_cmdline_tools(ioRtsManager.mIoHome);
+    register_io_cmdline_tools(&ioRtsManager);
 #endif
 
     register_misc_cmdline_tools();
