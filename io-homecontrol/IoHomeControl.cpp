@@ -702,6 +702,18 @@ namespace iohome
     }
   }
 
+  void IoHomeControl::RestoreDevice(const std::string &deviceID, const iohome::IoDevice &device)
+  {
+    if (!sDeviceMap.contains(deviceID))
+    {
+      sDeviceMap.insert({deviceID, device});
+    }
+    else
+    {
+      IO_LOGE("RestoreDevice: can't restore a device that already exists!");
+    }
+  }
+
   void IoHomeControl::DeleteDevice(const std::string &tmpDeviceID)
   {
     std::string deviceID(tmpDeviceID.length(), '0'); // init avoiding C++ 3133 warning

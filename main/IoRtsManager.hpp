@@ -50,7 +50,7 @@ namespace IoRts
         void InitializeStorage();
 
         /// @brief Load devices and remotes from flash storage, register them in IoHomeControl
-        void LoadDevicesFromStorage();
+        void LoadIoDevicesFromStorage();
 
         /// @brief Initialize Io objects members (mSX1276Radio, mIoHome)
         void InitializeIo();

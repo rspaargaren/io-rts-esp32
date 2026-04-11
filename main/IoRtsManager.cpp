@@ -55,9 +55,9 @@ namespace IoRts
                 // ask for discovery message
                 sendDiscovery = true;
                 // add device to flash storage
-                Helpers::StoredDevice storedDevice = {};
+                Helpers::StoredIoDevice storedDevice = {};
                 storedDevice.device = device;
-                Helpers::DeviceStorage::SaveDevice(deviceID, storedDevice);
+                Helpers::DeviceStorage::SaveIoDevice(deviceID, storedDevice);
             }
             else
             {
@@ -74,7 +74,7 @@ namespace IoRts
                     sendDiscovery = true;
                     memcpy(it->second.info.name, device.info.name, sizeof(device.info.name)); // could be update by "SetName"
                 }
-                // Update device type/subtype if they were unknown and now available
+                // Update device type/subtype if they were unknown and now available (should not happen, just in case...)
                 if (it->second.info.device_type == iohome::DeviceType::UNKNOWN && device.info.device_type != iohome::DeviceType::UNKNOWN)
                 {
                     sendDiscovery = true;
@@ -91,12 +91,12 @@ namespace IoRts
                 if (sendDiscovery)
                 {
                     // Load existing file to preserve linked remotes, then update device info
-                    Helpers::StoredDevice storedDevice = {};
+                    Helpers::StoredIoDevice storedDevice = {};
                     storedDevice.device = it->second;
-                    Helpers::StoredDevice existing;
-                    if (Helpers::DeviceStorage::LoadDevice(deviceID, existing) == ESP_OK)
+                    Helpers::StoredIoDevice existing;
+                    if (Helpers::DeviceStorage::LoadIoDevice(deviceID, existing) == ESP_OK)
                         storedDevice.linked_remotes = existing.linked_remotes;
-                    Helpers::DeviceStorage::SaveDevice(deviceID, storedDevice);
+                    Helpers::DeviceStorage::SaveIoDevice(deviceID, storedDevice);
                 }
             }
             sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
@@ -121,7 +121,7 @@ namespace IoRts
         // Initialize IO objects
         InitializeIo();
         // Load devices from flash storage
-        LoadDevicesFromStorage();
+        LoadIoDevicesFromStorage();
         // Initialize MQTT objects
         InitializeMqtt();
         // Start everything
@@ -157,8 +157,8 @@ namespace IoRts
             // Update mIODevices
             it->second.is_deleted = true;
             // Remove from storage
-            Helpers::DeviceStorage::RemoveDevice(deviceID);
-            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!;
+            Helpers::DeviceStorage::RemoveIoDevice(deviceID);
+            sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
             if (sMqttHelper != nullptr)
             {
                 // send MQTT discovery message
@@ -179,7 +179,7 @@ namespace IoRts
         if (success)
         {
             // Add remote to storage
-            Helpers::DeviceStorage::AddRemoteToDevice(remoteID, deviceID);
+            Helpers::DeviceStorage::AddRemoteToIoDevice(remoteID, deviceID);
         }
         return success;
     }
@@ -189,7 +189,7 @@ namespace IoRts
         if (mIoHome != nullptr)
             mIoHome->DeleteRemote(remoteID);
         // Remove from storage
-        Helpers::DeviceStorage::RemoveRemote(remoteID);
+        Helpers::DeviceStorage::RemoveRemoteFromIoDevices(remoteID);
     }
     void IoRtsManager::InitializeStorage()
     {
@@ -199,14 +199,14 @@ namespace IoRts
             ESP_LOGE(TAG, "Failed to initialize device storage (%s)", esp_err_to_name(err));
         }
     }
-    void IoRtsManager::LoadDevicesFromStorage()
+    void IoRtsManager::LoadIoDevicesFromStorage()
     {
 #ifdef CONFIG_ENABLE_IOHOMECONTROL
         if (mIoHome == nullptr)
             return;
 
-        std::map<std::string, Helpers::StoredDevice> storedDevices;
-        esp_err_t err = Helpers::DeviceStorage::LoadAll(storedDevices);
+        std::map<std::string, Helpers::StoredIoDevice> storedDevices;
+        esp_err_t err = Helpers::DeviceStorage::LoadAllIoDevices(storedDevices);
         if (err != ESP_OK)
         {
             ESP_LOGE(TAG, "Failed to load devices from storage (%s)", esp_err_to_name(err));
@@ -215,8 +215,8 @@ namespace IoRts
 
         for (const auto &[deviceID, storedDevice] : storedDevices)
         {
-            // Register device in protocol layer
-            mIoHome->AddDevice(deviceID);
+            // Restore device in protocol layer
+            mIoHome->RestoreDevice(deviceID, storedDevice.device);
             // Add to our local map
             mIoDevicesMutex.lock();
             mIoDevices.insert({deviceID, storedDevice.device});

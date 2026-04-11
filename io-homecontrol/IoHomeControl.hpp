@@ -97,6 +97,11 @@ namespace iohome
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     void AddDevice(const std::string &deviceID);
 
+    /// @brief Restore 2W device to controller by providing an IoDevice object
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    /// @param device IoDevice object to restore (read from storage for example)
+    void RestoreDevice(const std::string &deviceID, const iohome::IoDevice &device);
+
     /// @brief Delete 2W device from controller
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     void DeleteDevice(const std::string &deviceID);

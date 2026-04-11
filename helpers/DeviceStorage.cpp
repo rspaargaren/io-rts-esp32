@@ -13,6 +13,9 @@ static const char *TAG = "devStorage";
 
 static constexpr const char *STORAGE_BASE_PATH = "/devices";
 static constexpr const char *STORAGE_PARTITION = "devices";
+static constexpr const char *STORAGE_DEVICE_SUFFIX = ".json";
+static constexpr const char *STORAGE_IO_DEVICE_PREFIX = "io_";
+static constexpr size_t IO_DEVICE_FILENAME_LENGTH = 14; // io_XXXXXX.json
 
 namespace Helpers
 {
@@ -41,12 +44,12 @@ namespace Helpers
         return ESP_OK;
     }
 
-    std::string DeviceStorage::GetDeviceFilePath(const std::string &deviceID)
+    std::string DeviceStorage::GetIoDeviceFilePath(const std::string &deviceID)
     {
-        return std::format("{}/{}.json", STORAGE_BASE_PATH, deviceID);
+        return std::format("{}/{}{}.json", STORAGE_BASE_PATH, STORAGE_IO_DEVICE_PREFIX, deviceID);
     }
 
-    esp_err_t DeviceStorage::WriteDeviceFile(const std::string &filePath, const std::string &deviceID, const StoredDevice &storedDevice)
+    esp_err_t DeviceStorage::WriteIoDeviceFile(const std::string &filePath, const std::string &deviceID, const StoredIoDevice &storedDevice)
     {
         cJSON *root = cJSON_CreateObject();
         if (root == nullptr)
@@ -119,7 +122,7 @@ namespace Helpers
         return err;
     }
 
-    esp_err_t DeviceStorage::ReadDeviceFile(const std::string &filePath, std::string &deviceID, StoredDevice &storedDevice)
+    esp_err_t DeviceStorage::ReadIoDeviceFile(const std::string &filePath, std::string &deviceID, StoredIoDevice &storedDevice)
     {
         FILE *f = fopen(filePath.c_str(), "r");
         if (f == nullptr)
@@ -224,14 +227,14 @@ namespace Helpers
         return ESP_OK;
     }
 
-    esp_err_t DeviceStorage::LoadDevice(const std::string &deviceID, StoredDevice &storedDevice)
+    esp_err_t DeviceStorage::LoadIoDevice(const std::string &deviceID, StoredIoDevice &storedDevice)
     {
-        std::string filePath = GetDeviceFilePath(deviceID);
+        std::string filePath = GetIoDeviceFilePath(deviceID);
         std::string readDeviceID;
-        return ReadDeviceFile(filePath, readDeviceID, storedDevice);
+        return ReadIoDeviceFile(filePath, readDeviceID, storedDevice);
     }
 
-    esp_err_t DeviceStorage::LoadAll(std::map<std::string, StoredDevice> &devices)
+    esp_err_t DeviceStorage::LoadAllIoDevices(std::map<std::string, StoredIoDevice> &devices)
     {
         devices.clear();
 
@@ -246,15 +249,17 @@ namespace Helpers
         while ((entry = readdir(dir)) != nullptr)
         {
             std::string filename(entry->d_name);
-            // Only process .json files
-            if (filename.length() < 6 || filename.substr(filename.length() - 5) != ".json")
+            // Only process io_XXXXXX.json files
+            if (filename.length() != IO_DEVICE_FILENAME_LENGTH
+                || filename.substr(0, 3) != STORAGE_IO_DEVICE_PREFIX
+                || filename.substr(filename.length() - 5) != STORAGE_DEVICE_SUFFIX)
                 continue;
 
             std::string filePath = std::format("{}/{}", STORAGE_BASE_PATH, filename);
             std::string deviceID;
-            StoredDevice storedDevice;
+            StoredIoDevice storedDevice;
 
-            esp_err_t err = ReadDeviceFile(filePath, deviceID, storedDevice);
+            esp_err_t err = ReadIoDeviceFile(filePath, deviceID, storedDevice);
             if (err == ESP_OK && !deviceID.empty())
             {
                 devices.insert({deviceID, storedDevice});
@@ -271,15 +276,15 @@ namespace Helpers
         return ESP_OK;
     }
 
-    esp_err_t DeviceStorage::SaveDevice(const std::string &deviceID, const StoredDevice &device)
+    esp_err_t DeviceStorage::SaveIoDevice(const std::string &deviceID, const StoredIoDevice &device)
     {
-        std::string filePath = GetDeviceFilePath(deviceID);
-        return WriteDeviceFile(filePath, deviceID, device);
+        std::string filePath = GetIoDeviceFilePath(deviceID);
+        return WriteIoDeviceFile(filePath, deviceID, device);
     }
 
-    esp_err_t DeviceStorage::RemoveDevice(const std::string &deviceID)
+    esp_err_t DeviceStorage::RemoveIoDevice(const std::string &deviceID)
     {
-        std::string filePath = GetDeviceFilePath(deviceID);
+        std::string filePath = GetIoDeviceFilePath(deviceID);
         if (remove(filePath.c_str()) != 0)
         {
             ESP_LOGW(TAG, "Could not remove device file %s (may not exist)", deviceID.c_str());
@@ -289,13 +294,13 @@ namespace Helpers
         return ESP_OK;
     }
 
-    esp_err_t DeviceStorage::AddRemoteToDevice(const std::string &remoteID, const std::string &deviceID)
+    esp_err_t DeviceStorage::AddRemoteToIoDevice(const std::string &remoteID, const std::string &deviceID)
     {
-        std::string filePath = GetDeviceFilePath(deviceID);
+        std::string filePath = GetIoDeviceFilePath(deviceID);
         std::string readDeviceID;
-        StoredDevice storedDevice;
+        StoredIoDevice storedDevice;
 
-        esp_err_t err = ReadDeviceFile(filePath, readDeviceID, storedDevice);
+        esp_err_t err = ReadIoDeviceFile(filePath, readDeviceID, storedDevice);
         if (err != ESP_OK)
         {
             ESP_LOGE(TAG, "Cannot add remote %s: device %s not found in storage", remoteID.c_str(), deviceID.c_str());
@@ -310,10 +315,10 @@ namespace Helpers
         }
 
         storedDevice.linked_remotes.push_back(remoteID);
-        return WriteDeviceFile(filePath, deviceID, storedDevice);
+        return WriteIoDeviceFile(filePath, deviceID, storedDevice);
     }
 
-    esp_err_t DeviceStorage::RemoveRemote(const std::string &remoteID)
+    esp_err_t DeviceStorage::RemoveRemoteFromIoDevices(const std::string &remoteID)
     {
         // Iterate over all device files and remove this remote from each
         DIR *dir = opendir(STORAGE_BASE_PATH);
@@ -324,20 +329,23 @@ namespace Helpers
         while ((entry = readdir(dir)) != nullptr)
         {
             std::string filename(entry->d_name);
-            if (filename.length() < 6 || filename.substr(filename.length() - 5) != ".json")
+            // Only process io_XXXXXX.json files
+            if (filename.length() != IO_DEVICE_FILENAME_LENGTH
+                || filename.substr(0, 3) != STORAGE_IO_DEVICE_PREFIX
+                || filename.substr(filename.length() - 5) != STORAGE_DEVICE_SUFFIX)
                 continue;
 
             std::string filePath = std::format("{}/{}", STORAGE_BASE_PATH, filename);
             std::string deviceID;
-            StoredDevice storedDevice;
+            StoredIoDevice storedDevice;
 
-            if (ReadDeviceFile(filePath, deviceID, storedDevice) == ESP_OK)
+            if (ReadIoDeviceFile(filePath, deviceID, storedDevice) == ESP_OK)
             {
                 auto it = std::find(storedDevice.linked_remotes.begin(), storedDevice.linked_remotes.end(), remoteID);
                 if (it != storedDevice.linked_remotes.end())
                 {
                     storedDevice.linked_remotes.erase(it);
-                    WriteDeviceFile(filePath, deviceID, storedDevice);
+                    WriteIoDeviceFile(filePath, deviceID, storedDevice);
                     ESP_LOGI(TAG, "Removed remote %s from device %s", remoteID.c_str(), deviceID.c_str());
                 }
             }
