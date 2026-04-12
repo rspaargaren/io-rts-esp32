@@ -20,19 +20,28 @@ static const std::string MQTT_CLIENT_COMMAND_FAV_POS_TOPIC = "/set_fav_pos";   /
 static const std::string MQTT_CLIENT_STATE_TOPIC = "/state";                   // state topic
 static const std::string MQTT_CLIENT_POSITION_TOPIC = "/position";             // position topic
 static const std::string MQTT_CLIENT_DISCOVERY_TOPIC = "/config";              // discovery topic
-static const std::string MQTT_CLIENT_BIRTH_WILL_TOPIC = "/status";             // birth and last will topic
-static const std::string MQTT_CLIENT_REBOOT_ID = "button_reboot";              // unique id and topic for "reboot" button
-static const std::string MQTT_CLIENT_DISCOVER_ID = "button_discover";          // unique id and topic for "Discover" button
-static const std::string MQTT_CLIENT_MANAGE_IO_ID = "manage_io";               // topic for IO devices management components
-static const std::string MQTT_CLIENT_ADD_DEVICE_ID = "AddIoDevice";            // unique id and action for "AddDevice" component
-static const std::string MQTT_CLIENT_REM_DEVICE_ID = "RemoveIoDevice";         // unique id and action for "RemoveDevice" component
-static const std::string MQTT_CLIENT_LINK_REMOTE_ID = "LinkIoRemote";          // unique id and action for "LinkRemote" component
-static const std::string MQTT_CLIENT_REM_REMOTE_ID = "RemoveIoRemote";         // unique id and action for "RemoveRemote" component
-static const std::string MQTT_CLIENT_SET_DEVICE_NAME_ID = "SetIoDeviceName";   // unique id and action for "SetDeviceName" component
-static const std::string MQTT_CLIENT_PREFIX_IO = "io_";                        // unique_id prefix for IO devices
-static const std::string MQTT_CLIENT_SUFFIX_FAV_IO = "_fav";                   // unique_id suffix for IO devices "favorite" button
-static const std::string MQTT_CLIENT_BIRTH_MSG = "online";                     // last will message
-static const std::string MQTT_CLIENT_WILL_MSG = "offline";                     // last will message
+
+static const std::string MQTT_CLIENT_REBOOT_ID = "button_reboot";     // unique id and topic for "reboot" button
+static const std::string MQTT_CLIENT_DISCOVER_ID = "button_discover"; // unique id and topic for "Discover" button
+
+static const std::string MQTT_CLIENT_CONFIG_IO_ID = "config_io";   // topic for IO layer configuration components
+static const std::string MQTT_CLIENT_IO_LOGGING_ID = "IoLogging";  // unique id and action for "IoLogging" component
+static const std::string MQTT_CLIENT_IO_PASSIVE_ID = "IoPassive";  // unique id and action for "IoPassive" component
+static const std::string MQTT_CLIENT_IO_TX_POWER_ID = "IoTxPower"; // unique id and action for "IoTxPower" component
+
+static const std::string MQTT_CLIENT_MANAGE_IO_ID = "manage_io";             // topic for IO devices management components
+static const std::string MQTT_CLIENT_ADD_DEVICE_ID = "AddIoDevice";          // unique id and action for "AddDevice" component
+static const std::string MQTT_CLIENT_REM_DEVICE_ID = "RemoveIoDevice";       // unique id and action for "RemoveDevice" component
+static const std::string MQTT_CLIENT_LINK_REMOTE_ID = "LinkIoRemote";        // unique id and action for "LinkRemote" component
+static const std::string MQTT_CLIENT_REM_REMOTE_ID = "RemoveIoRemote";       // unique id and action for "RemoveRemote" component
+static const std::string MQTT_CLIENT_SET_DEVICE_NAME_ID = "SetIoDeviceName"; // unique id and action for "SetDeviceName" component
+
+static const std::string MQTT_CLIENT_PREFIX_IO = "io_";      // unique_id prefix for IO devices
+static const std::string MQTT_CLIENT_SUFFIX_FAV_IO = "_fav"; // unique_id suffix for IO devices "favorite" button
+
+static const std::string MQTT_CLIENT_BIRTH_WILL_TOPIC = "/status"; // birth and last will topic
+static const std::string MQTT_CLIENT_BIRTH_MSG = "online";         // last will message - birth
+static const std::string MQTT_CLIENT_WILL_MSG = "offline";         // last will message - death
 
 static const char *TAG = "MQTTHelper";
 
@@ -60,6 +69,22 @@ namespace Helpers
             const char *data = MQTT_CLIENT_BIRTH_MSG.c_str();
             msg_id = esp_mqtt_client_publish(client, topic.c_str(), data, 0, 0, 1);
             ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+            // Send current IO config (logging, passive mode, Tx power)
+            topic = mqttHelper->GetTopicPrefix() + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
+            cJSON *ioConfig = cJSON_CreateObject();
+            if (ioConfig != NULL)
+            {
+                bool error = false;
+                std::string logging = IoHomeConfig::isLoggingEnabled() ? "ON" : "OFF";
+                std::string passive = IoHomeConfig::isPassiveModeEnabled() ? "ON" : "OFF";
+                error = error || (cJSON_AddStringToObject(ioConfig, MQTT_CLIENT_IO_LOGGING_ID.c_str(), logging.c_str()) == NULL);             // IoLogging
+                error = error || (cJSON_AddStringToObject(ioConfig, MQTT_CLIENT_IO_PASSIVE_ID.c_str(), passive.c_str()) == NULL);             // IoPassive
+                error = error || (cJSON_AddNumberToObject(ioConfig, MQTT_CLIENT_IO_TX_POWER_ID.c_str(), IoHomeConfig::GetTxPower()) == NULL); // IoTxPower
+                const char *config = cJSON_Print(ioConfig);
+                esp_mqtt_client_publish(client, topic.c_str(), config, 0, 0, 1);
+                cJSON_free((void *)config);
+                cJSON_Delete(ioConfig);
+            }
             // Send discovery
             mqttHelper->SendDiscovery();
             // subscribe to all command topics
@@ -110,7 +135,7 @@ namespace Helpers
                         ESP_LOGI(TAG, "REBOOT requested from MQTT!");
                         mqttHelper->GetIoRtsManager()->Reboot();
                     }
-                    else if (entity_id.compare(MQTT_CLIENT_MANAGE_IO_ID) == 0 && topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
+                    else if (entity_id.compare(MQTT_CLIENT_CONFIG_IO_ID) == 0 && topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
                     {
                         ESP_LOGI(TAG, "IO CONFIG requested from MQTT!");
                         // Let's parse the JSON
@@ -122,6 +147,55 @@ namespace Helpers
                         if (root == nullptr)
                         {
                             ESP_LOGE(TAG, "Failed to parse JSON from IO CONFIG requested from MQTT!");
+                            break;
+                        }
+                        // Let's check what we have to do
+                        cJSON *loggingItem = cJSON_GetObjectItem(root, MQTT_CLIENT_IO_LOGGING_ID.c_str());
+                        if (cJSON_IsString(loggingItem))
+                        {
+                            std::string value(loggingItem->valuestring);
+                            if (value.compare("ON") == 0)
+                            {
+                                IoHomeConfig::ActivateLogging(true);
+                            }
+                            else if (value.compare("OFF") == 0)
+                            {
+                                IoHomeConfig::ActivateLogging(false);
+                            }
+                        }
+                        cJSON *passiveItem = cJSON_GetObjectItem(root, MQTT_CLIENT_IO_PASSIVE_ID.c_str());
+                        if (cJSON_IsString(passiveItem))
+                        {
+                            std::string value(passiveItem->valuestring);
+                            if (value.compare("ON") == 0)
+                            {
+                                IoHomeConfig::ActivatePassiveMode(true);
+                            }
+                            else if (value.compare("OFF") == 0)
+                            {
+                                IoHomeConfig::ActivatePassiveMode(false);
+                            }
+                        }
+                        cJSON *txPowerItem = cJSON_GetObjectItem(root, MQTT_CLIENT_IO_TX_POWER_ID.c_str());
+                        if (cJSON_IsNumber(txPowerItem))
+                        {
+                            IoHomeConfig::SetTxPower(cJSON_GetNumberValue(txPowerItem));
+                        }
+                        // Don't forget to delete JSON object to free memory!
+                        cJSON_Delete(root);
+                    }
+                    else if (entity_id.compare(MQTT_CLIENT_MANAGE_IO_ID) == 0 && topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
+                    {
+                        ESP_LOGI(TAG, "IO MANAGE requested from MQTT!");
+                        // Let's parse the JSON
+                        char *buf = new char[event->data_len + 1];
+                        memcpy(buf, event->data, event->data_len);
+                        buf[event->data_len] = '\0';
+                        cJSON *root = cJSON_Parse(buf);
+                        delete[] buf;
+                        if (root == nullptr)
+                        {
+                            ESP_LOGE(TAG, "Failed to parse JSON from IO MANAGE requested from MQTT!");
                             break;
                         }
                         // Let's check what we have to do
@@ -417,7 +491,66 @@ namespace Helpers
                     std::string reboot_topic = mTopicPrefix + "/" + MQTT_CLIENT_REBOOT_ID + MQTT_CLIENT_COMMAND_TOPIC;
                     error = error || (cJSON_AddStringToObject(cmp, "command_topic", reboot_topic.c_str()) == NULL); // command_topic
                 }
-                if (!mIsIoHomePassive) // // don't send IO devices if in passive mode
+                // Add "IoLogging" switch https://www.home-assistant.io/integrations/switch.mqtt/
+                cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_LOGGING_ID.c_str());
+                if (cmp == NULL)
+                    error = true;
+                else
+                {
+                    error = error || (cJSON_AddStringToObject(cmp, "p", "switch") == NULL);                                  // platform
+                    error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_LOGGING_ID.c_str()) == NULL); // unique_id
+                    error = error || (cJSON_AddStringToObject(cmp, "name", "Enable IO logging") == NULL);                    // name
+                    error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                               // optimistic
+                    std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
+                    error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
+                    std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_LOGGING_ID + " }}";
+                    error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
+                    std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                    error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                    std::string command_template = "{\"" + MQTT_CLIENT_IO_LOGGING_ID + "\": \"{{ value }}\"}";
+                    error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+                }
+                // Add "IoPassive" switch https://www.home-assistant.io/integrations/switch.mqtt/
+                cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_PASSIVE_ID.c_str());
+                if (cmp == NULL)
+                    error = true;
+                else
+                {
+                    error = error || (cJSON_AddStringToObject(cmp, "p", "switch") == NULL);                                  // platform
+                    error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_PASSIVE_ID.c_str()) == NULL); // unique_id
+                    error = error || (cJSON_AddStringToObject(cmp, "name", "Enable IO Passive mode") == NULL);               // name
+                    error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                               // optimistic
+                    std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
+                    error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
+                    std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_PASSIVE_ID + " }}";
+                    error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
+                    std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                    error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                    std::string command_template = "{\"" + MQTT_CLIENT_IO_PASSIVE_ID + "\": \"{{ value }}\"}";
+                    error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+                }
+                // Add "IoTxPower" number https://www.home-assistant.io/integrations/number.mqtt/
+                cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_IO_TX_POWER_ID.c_str());
+                if (cmp == NULL)
+                    error = true;
+                else
+                {
+                    error = error || (cJSON_AddStringToObject(cmp, "p", "number") == NULL);                                   // platform
+                    error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_IO_TX_POWER_ID.c_str()) == NULL); // unique_id
+                    error = error || (cJSON_AddStringToObject(cmp, "name", "IO Tx Power") == NULL);                           // name
+                    error = error || (cJSON_AddBoolToObject(cmp, "optimistic", true) == NULL);                                // optimistic
+                    error = error || (cJSON_AddNumberToObject(cmp, "min", 0) == NULL);                                        // min
+                    error = error || (cJSON_AddNumberToObject(cmp, "max", 20) == NULL);                                       // max
+                    std::string state_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_STATE_TOPIC;
+                    error = error || (cJSON_AddStringToObject(cmp, "state_topic", state_topic.c_str()) == NULL); // state_topic
+                    std::string value_template = "{{ value_json." + MQTT_CLIENT_IO_TX_POWER_ID + " }}";
+                    error = error || (cJSON_AddStringToObject(cmp, "value_template", value_template.c_str()) == NULL); // value_template
+                    std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_CONFIG_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                    error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                    std::string command_template = "{\"" + MQTT_CLIENT_IO_TX_POWER_ID + "\": {{ value }} }";
+                    error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+                }
+                if (!mIsIoHomePassive) // don't send IO devices if in passive mode
                 {
                     // Add 'Discover' button
                     cmp = cJSON_AddObjectToObject(cmps, "discover");
@@ -683,6 +816,7 @@ namespace Helpers
             else
             {
                 esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), data, 0, 0, 1);
+                cJSON_free((void *)data);
                 ESP_LOGI(TAG, "Sent discovery successfully");
             }
         }

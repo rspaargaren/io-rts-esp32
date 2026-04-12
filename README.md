@@ -56,12 +56,13 @@ These features are currently available:
       - An input is added to change name of an IO device already added / paired. Enter the device ID and new name separated by ; (XXYYZZ;New name) in the input and validate. The new name length must be less or equal to 16 characters.
       - An input is added to link an IO device to an IO remote (IO device must already be added). Enter the device ID and remote ID separated by a ; (XXYYZZ;AABBCC) in the input and validate.
       - An input is added to delete an IO remote already added. Enter the remote ID (XXYYZZ) in the input and validate.
+      - A switch is added to enable/disable IO layer logging (applied after reboot)
+      - A switch is added to enable/disable IO passive mode (applied after reboot)
+      - A slider is added to configure IO Tx power (applied after reboot)
 - Configuration storage to flash
 - Devices storage to flash (thanks [@kfroeschl](https://github.com/kfroeschl))
 
 These features should be available before end of 2026 depending on my available time:
-- MQTT (expected April-May 2026 :calendar:):
-  - Configuration from MQTT (in addition to command line capability)
 - ESP32 security features (expected April-June 2026 :calendar:, optional, enable if you want): flash encryption, secure boot, firmware signature
 - OTA sofware update (expected April-June 2026 :calendar:): update over Wifi/Ethernet, without flashing from USB, with rollback in case of failure
 - RTS protocol for legacy devices, based on CC1101 module (expected August-October 2026 :calendar:)
