@@ -50,14 +50,17 @@ These features are currently available:
     - A "Favorite position" button for devices based on position (shutter, blind, awning, window opener, garage opener, gate opener) is available.
     - In addition to devices:
       - A button is added to reboot the ESP32 board.
-      - A button is added to discover new IO devices (to add devices never paired to 2W box or reset to factory settings)
+      - A button is added to discover and pair a new IO device (to add device never paired to 2W box or reset to factory settings)
+      - An input is added to add an IO device already paired (the device must already contain the system key of your installation). Enter the device ID (XXYYZZ) in the input and validate.
+      - An input is added to delete an IO device already added / paired. Enter the device ID (XXYYZZ) in the input and validate.
+      - An input is added to change name of an IO device already added / paired. Enter the device ID and new name separated by ; (XXYYZZ;New name) in the input and validate. The new name length must be less or equal to 16 characters.
+      - An input is added to link an IO device to an IO remote (IO device must already be added). Enter the device ID and remote ID separated by a ; (XXYYZZ;AABBCC) in the input and validate.
+      - An input is added to delete an IO remote already added. Enter the remote ID (XXYYZZ) in the input and validate.
 - Configuration storage to flash
 - Devices storage to flash (thanks [@kfroeschl](https://github.com/kfroeschl))
 
 These features should be available before end of 2026 depending on my available time:
 - MQTT (expected April-May 2026 :calendar:):
-  - Add / delete device
-  - Link remote to device / delete remote
   - Configuration from MQTT (in addition to command line capability)
 - ESP32 security features (expected April-June 2026 :calendar:, optional, enable if you want): flash encryption, secure boot, firmware signature
 - OTA sofware update (expected April-June 2026 :calendar:): update over Wifi/Ethernet, without flashing from USB, with rollback in case of failure
