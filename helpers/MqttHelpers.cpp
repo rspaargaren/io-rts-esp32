@@ -32,6 +32,7 @@ static const std::string MQTT_CLIENT_IO_TX_POWER_ID = "IoTxPower"; // unique id 
 static const std::string MQTT_CLIENT_MANAGE_IO_ID = "manage_io";             // topic for IO devices management components
 static const std::string MQTT_CLIENT_ADD_DEVICE_ID = "AddIoDevice";          // unique id and action for "AddDevice" component
 static const std::string MQTT_CLIENT_REM_DEVICE_ID = "RemoveIoDevice";       // unique id and action for "RemoveDevice" component
+static const std::string MQTT_CLIENT_INV_DEVICE_ID = "InvertIoDevice";       // unique id and action for "InvertDevice" component
 static const std::string MQTT_CLIENT_LINK_REMOTE_ID = "LinkIoRemote";        // unique id and action for "LinkRemote" component
 static const std::string MQTT_CLIENT_REM_REMOTE_ID = "RemoveIoRemote";       // unique id and action for "RemoveRemote" component
 static const std::string MQTT_CLIENT_SET_DEVICE_NAME_ID = "SetIoDeviceName"; // unique id and action for "SetDeviceName" component
@@ -221,6 +222,17 @@ namespace Helpers
                                 std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
                                                { return std::toupper(c); }); // convert to uppercase
                                 mqttHelper->GetIoRtsManager()->RemoveIoDevice(deviceID);
+                            }
+                        }
+                        cJSON *invertDeviceItem = cJSON_GetObjectItem(root, MQTT_CLIENT_INV_DEVICE_ID.c_str());
+                        if (cJSON_IsString(invertDeviceItem))
+                        {
+                            std::string deviceID(invertDeviceItem->valuestring);
+                            if (deviceID.length() == NODE_ID_SIZE * 2)
+                            {
+                                std::transform(deviceID.begin(), deviceID.end(), deviceID.begin(), [](unsigned char c)
+                                               { return std::toupper(c); }); // convert to uppercase
+                                mqttHelper->GetIoRtsManager()->mIoHome->InvertOpenClosePositionForDevice(deviceID);
                             }
                         }
                         cJSON *linkRemoteToDeviceItem = cJSON_GetObjectItem(root, MQTT_CLIENT_LINK_REMOTE_ID.c_str());
@@ -594,6 +606,20 @@ namespace Helpers
                         std::string command_template = "{\"" + MQTT_CLIENT_REM_DEVICE_ID + "\": \"{{ value }}\"}";
                         error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
                     }
+                    // Add "InvertIoDevice" text https://www.home-assistant.io/integrations/text.mqtt/
+                    cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_INV_DEVICE_ID.c_str());
+                    if (cmp == NULL)
+                        error = true;
+                    else
+                    {
+                        error = error || (cJSON_AddStringToObject(cmp, "p", "text") == NULL);                                    // platform
+                        error = error || (cJSON_AddStringToObject(cmp, "unique_id", MQTT_CLIENT_INV_DEVICE_ID.c_str()) == NULL); // unique_id
+                        error = error || (cJSON_AddStringToObject(cmp, "name", "Invert IO device") == NULL);                     // name
+                        std::string command_topic = mTopicPrefix + "/" + MQTT_CLIENT_MANAGE_IO_ID + MQTT_CLIENT_COMMAND_TOPIC;
+                        error = error || (cJSON_AddStringToObject(cmp, "command_topic", command_topic.c_str()) == NULL); // command_topic
+                        std::string command_template = "{\"" + MQTT_CLIENT_INV_DEVICE_ID + "\": \"{{ value }}\"}";
+                        error = error || (cJSON_AddStringToObject(cmp, "command_template", command_template.c_str()) == NULL); // command_template
+                    }
                     // Add "LinkIoRemote" text https://www.home-assistant.io/integrations/text.mqtt/
                     cmp = cJSON_AddObjectToObject(cmps, MQTT_CLIENT_LINK_REMOTE_ID.c_str());
                     if (cmp == NULL)
@@ -676,8 +702,16 @@ namespace Helpers
                                 if (!it->second.is_deleted)
                                 {
                                     // add attributes only if not deleted
-                                    error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 100) == NULL);                                  // position_closed
-                                    error = error || (cJSON_AddNumberToObject(cmp, "position_open", 0) == NULL);                                      // position_open
+                                    if (it->second.info.is_openclose_inverted)
+                                    {
+                                        error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 0) == NULL); // position_closed
+                                        error = error || (cJSON_AddNumberToObject(cmp, "position_open", 100) == NULL); // position_open
+                                    }
+                                    else
+                                    {
+                                        error = error || (cJSON_AddNumberToObject(cmp, "position_closed", 100) == NULL); // position_closed
+                                        error = error || (cJSON_AddNumberToObject(cmp, "position_open", 0) == NULL);     // position_open
+                                    }
                                     error = error || (cJSON_AddStringToObject(cmp, "position_topic", device_position_topic.c_str()) == NULL);         // position_topic
                                     error = error || (cJSON_AddStringToObject(cmp, "set_position_topic", device_cmd_position_topic.c_str()) == NULL); // set_position_topic
                                     // add device_class https://www.home-assistant.io/integrations/cover/#device_class
@@ -868,17 +902,27 @@ namespace Helpers
                     // send state
                     if (device->second.is_stopped)
                     {
-                        if (device->second.position > (float)99.9)
-                            data = "closed";
+                        if (device->second.info.is_openclose_inverted)
+                        {
+                            if (device->second.position < (float)0.1)
+                                data = "closed";
+                            else
+                                data = "open";
+                        }
                         else
-                            data = "open";
+                        {
+                            if (device->second.position > (float)99.9)
+                                data = "closed";
+                            else
+                                data = "open";
+                        }
                     }
                     else
                     {
                         if (device->second.position > device->second.target)
-                            data = "opening";
+                            data = device->second.info.is_openclose_inverted ? "closing" : "opening";
                         else
-                            data = "closing";
+                            data = device->second.info.is_openclose_inverted ? "opening" : "closing";
                     }
                     esp_mqtt_client_publish(mMqttClientHandle, stateTopic.c_str(), data.c_str(), 0, 0, 1);
                 }

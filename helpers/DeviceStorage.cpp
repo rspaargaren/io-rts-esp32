@@ -83,6 +83,9 @@ namespace Helpers
         cJSON_AddStringToObject(root, "info1", dev.info.info1);
         cJSON_AddStringToObject(root, "info2", dev.info.info2);
 
+        // Flags
+        cJSON_AddBoolToObject(root, "open_close_inverted", dev.info.is_openclose_inverted);
+
         // Linked remotes
         cJSON *remotes = cJSON_AddArrayToObject(root, "remotes");
         if (remotes != nullptr)
@@ -201,6 +204,11 @@ namespace Helpers
         cJSON *info2Item = cJSON_GetObjectItem(root, "info2");
         if (cJSON_IsString(info2Item))
             strncpy(dev.info.info2, info2Item->valuestring, iohome::CMD_PARAM_INFO2_MAXSIZE - 1);
+        
+        // Parse flags
+        cJSON *openCloseInvertedItem = cJSON_GetObjectItem(root, "open_close_inverted");
+        if (cJSON_IsBool(openCloseInvertedItem))
+            dev.info.is_openclose_inverted = cJSON_IsTrue(openCloseInvertedItem);
 
         // Initialize runtime fields
         dev.is_stopped = true;

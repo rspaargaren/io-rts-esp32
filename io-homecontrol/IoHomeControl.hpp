@@ -126,18 +126,12 @@ namespace iohome
     /// @brief Open an actuator (0% closed / light on / switch on)
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     /// @return true on success, false on error
-    inline bool OpenDevice(const std::string &deviceID, bool quiet = false)
-    {
-      return SetDevicePosition(deviceID, 0, quiet);
-    }
+    bool OpenDevice(const std::string &deviceID, bool quiet = false);
 
     /// @brief Close an actuator (100% closed / light off / switch off)
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     /// @return true on success, false on error
-    inline bool CloseDevice(const std::string &deviceID, bool quiet = false)
-    {
-      return SetDevicePosition(deviceID, 100, quiet);
-    }
+    bool CloseDevice(const std::string &deviceID, bool quiet = false);
 
     /// @brief Stop actuator movement
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
@@ -177,6 +171,10 @@ namespace iohome
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     /// @return true if device was successfully configured, false otherwise (some devices don't support this configuration command)
     bool ConfigureDeviceToSendStatus(const std::string &deviceID);
+
+    /// @brief Invert OPEN/CLOSE position for given device
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    void InvertOpenClosePositionForDevice(const std::string &deviceID);
 
   protected:
     uint8_t mOwnNodeId[NODE_ID_SIZE]; // Our NodeID (3 bytes)

@@ -910,6 +910,48 @@ namespace iohome
     }
   }
 
+  bool IoHomeControl::OpenDevice(const std::string &deviceID, bool quiet)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("OpenDevice: invalid state! (not initialized or not listening or passive mode)");
+      return false;
+    }
+    std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
+    if (it == sDeviceMap.end())
+    {
+      IO_LOGE("OpenDevice: no device found in list!");
+      return false;
+    }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("OpenDevice: device is marked as deleted, add it before using it!");
+      return false;
+    }
+    return SetDevicePosition(deviceID, it->second.info.is_openclose_inverted ? 100 : 0, quiet);
+  }
+
+  bool IoHomeControl::CloseDevice(const std::string &deviceID, bool quiet)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("CloseDevice: invalid state! (not initialized or not listening or passive mode)");
+      return false;
+    }
+    std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
+    if (it == sDeviceMap.end())
+    {
+      IO_LOGE("CloseDevice: no device found in list!");
+      return false;
+    }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("CloseDevice: device is marked as deleted, add it before using it!");
+      return false;
+    }
+    return SetDevicePosition(deviceID, it->second.info.is_openclose_inverted ? 0 : 100, quiet);
+  }
+
   bool IoHomeControl::SetDeviceName(const std::string &deviceID, const std::string &name)
   {
     if (!mInitialized || !mReceiving || mPassiveMode)
@@ -1134,6 +1176,31 @@ namespace iohome
     }
   }
 
+  void IoHomeControl::InvertOpenClosePositionForDevice(const std::string &deviceID)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("InvertOpenClosePositionForDevice: invalid state! (not initialized or not listening or passive mode)");
+      return;
+    }
+    std::map<std::string, IoDevice>::iterator it = sDeviceMap.find(deviceID);
+    if (it == sDeviceMap.end())
+    {
+      IO_LOGE("InvertOpenClosePositionForDevice: no device found in list!");
+      return;
+    }
+    else if (it->second.is_deleted)
+    {
+      IO_LOGE("InvertOpenClosePositionForDevice: device is marked as deleted, add it before using it!");
+      return;
+    }
+    else
+    {
+      it->second.info.is_openclose_inverted = !it->second.info.is_openclose_inverted; // invert
+      it->second.next_status_update_timestamp = 0;                                    // force update
+    }
+  }
+
   bool IoHomeControl::TransmitFrame(const IoFrame &ioframe, uint32_t frequency, uint16_t preamble)
   {
     if (!mInitialized || !mReceiving || mPassiveMode)
@@ -1351,6 +1418,8 @@ namespace iohome
         memcpy(deviceIt->second.info.info2, info.c_str(), info.length());
         deviceIt->second.info.device_type = static_cast<DeviceType>(statusFrame.data[10] << 2 | statusFrame.data[11] >> 6);
         deviceIt->second.info.device_subtype = statusFrame.data[11] & CMD_PARAM_SUBTYPE_MASK;
+        if (deviceIt->second.info.device_type == DeviceType::HORIZONTAL_AWNING)
+          deviceIt->second.info.is_openclose_inverted = true;
       }
       // Note: don't notify device update here, as it is a frame received during device add (notification will be sent later)
       break;

@@ -41,10 +41,10 @@ namespace IoRts
 
     static void deviceStatusCallback(const std::string deviceID, const iohome::IoDevice &device)
     {
-        ESP_LOGI(TAG, "Callback received device status for %s: %s (0x%02X/0x%02X) / Position %.1f / Target %0.1f / Moving: %s / Deleted: %s",
+        ESP_LOGI(TAG, "Callback received device status for %s: %s (0x%02X/0x%02X) / Position %.1f / Target %0.1f / Moving: %s / Inverted: %s / Deleted: %s",
                  deviceID.c_str(), device.info.name, device.info.device_type, device.info.device_subtype,
                  device.position, device.target,
-                 device.is_stopped ? "No" : "Yes", device.is_deleted ? "Yes" : "No");
+                 device.is_stopped ? "No" : "Yes", device.info.is_openclose_inverted ? "Yes" : "No", device.is_deleted ? "Yes" : "No");
         if (sIoRtsManager == nullptr)
             return;
         if (!sIoRtsManager->isIoPassive()                                                                 // not passive mode
@@ -88,6 +88,12 @@ namespace IoRts
                     it->second.info.device_type = device.info.device_type;
                     it->second.info.device_subtype = device.info.device_subtype;
                     it->second.info.manufacturer = device.info.manufacturer;
+                }
+                // Update flags if changed
+                if (it->second.info.is_openclose_inverted != device.info.is_openclose_inverted)
+                {
+                    sendDiscovery = true;
+                    it->second.info.is_openclose_inverted = device.info.is_openclose_inverted;
                 }
                 it->second.is_stopped = device.is_stopped;
                 it->second.last_status_timestamp = device.last_status_timestamp;

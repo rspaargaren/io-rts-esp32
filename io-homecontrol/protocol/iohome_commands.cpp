@@ -85,6 +85,8 @@ namespace iohome
         {
             device.info.device_type = static_cast<DeviceType>(frame.data[0] << 2 | frame.data[1] >> 6);
             device.info.device_subtype = frame.data[1] & CMD_PARAM_SUBTYPE_MASK;
+            if (device.info.device_type == DeviceType::HORIZONTAL_AWNING)
+                device.info.is_openclose_inverted = true;
         }
         else
         {

@@ -11,7 +11,7 @@ This project is based on the wonderful work of:
 
 ### **Disclaimer**  
 > [!CAUTION]
-> This tool designed for educational and testing purposes, provided "as is", without warranty of any kind. Creators and contributors are not responsible for any misuse or damage caused by thistool. Keep in mind that it is forbidden in most countries to try to interact with IO-Homecontrol devices that are not yours and you may be sued for doing it.
+> This tool designed for educational and testing purposes, provided "as is", without warranty of any kind. Creators and contributors are not responsible for any misuse or damage caused by this tool. Keep in mind that it is forbidden in most countries to try to interact with IO-Homecontrol devices that are not yours and you may be sued for doing it.
 
 _I don't give any support concerning the IO-Homecontrol 1W part. I give limited support depending on my free time._
 
@@ -38,7 +38,7 @@ These features are currently available:
 - (S)NTP support for time synchronization
 - Front-end:
   - Command line features:
-    - Control IO devices: discover and pair, add, open, close, stop, set to favorite position, set to specific position (0-100%), change name inside device, link a remote to a device, delete a device, delete a remote
+    - Control IO devices: discover and pair, add, open, close, stop, set to favorite position, set to specific position (0-100%), change name inside device, link a remote to a device, delete a device, delete a remote, invert OPEN/CLOSE positions
     - Reboot ESP32
     - Change Wifi configuration without reflashing firmware (configuration applied after reboot)
     - Change DHCP/IPv4 configuration without reflashing firmware (configuration applied after reboot)
@@ -58,6 +58,7 @@ These features are currently available:
       - An input is added to change name of an IO device already added / paired. Enter the device ID and new name separated by ; (XXYYZZ;New name) in the input and validate. The new name length must be less or equal to 16 characters.
       - An input is added to link an IO device to an IO remote (IO device must already be added). Enter the device ID and remote ID separated by a ; (XXYYZZ;AABBCC) in the input and validate.
       - An input is added to delete an IO remote already added. Enter the remote ID (XXYYZZ) in the input and validate.
+      - An input is added to invert OPEN/CLOSE positions on an IO device already added / paired. Enter the device ID (XXYYZZ) in the input and validate.
       - A switch is added to enable/disable IO layer logging (applied after reboot)
       - A switch is added to enable/disable IO passive mode (applied after reboot)
       - A slider is added to configure IO Tx power (applied after reboot)

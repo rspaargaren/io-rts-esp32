@@ -511,11 +511,49 @@ void register_iodevicefeedback(void)
         .help = "Configure IO-HomeControl device to send its status automatically (not supported by all devices)",
         .hint = NULL,
         .func = &do_iodevicefeedback_cmd,
-        .argtable = &ioupdate_args,
+        .argtable = &iodevicefeedback_args,
         .func_w_context = NULL,
         .context = NULL};
 
     ESP_ERROR_CHECK(esp_console_cmd_register(&iodevicefeedback_cmd));
+}
+
+// ******************* IO INVERT DEVICE ********************
+
+/// @brief Structure used by the 'io_invertdevice' command
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} ioinvertdevice_args;
+
+static int do_ioinvertdevice_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&ioinvertdevice_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, ioinvertdevice_args.end, argv[0]);
+        return 1;
+    }
+    sIoHome->InvertOpenClosePositionForDevice(ioinvertdevice_args.device_id->sval[0]);
+    return 0;
+}
+
+void register_ioinvertdevice(void)
+{
+    ioinvertdevice_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device, 3 bytes (eg 112233)");
+    ioinvertdevice_args.end = arg_end(1);
+
+    const esp_console_cmd_t ioinvertdevice_cmd = {
+        .command = "io_invertdevice",
+        .help = "Configure IO-HomeControl device to invert OPEN and CLOSE commands",
+        .hint = NULL,
+        .func = &do_ioinvertdevice_cmd,
+        .argtable = &ioinvertdevice_args,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&ioinvertdevice_cmd));
 }
 
 // ******************* IO CONFIG ********************
@@ -686,5 +724,6 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_iolinkremote();
     register_ioremoveremote();
     register_iodevicefeedback();
+    register_ioinvertdevice();
     register_ioconfig();
 }
