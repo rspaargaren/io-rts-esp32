@@ -176,6 +176,12 @@ namespace iohome
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     void InvertOpenClosePositionForDevice(const std::string &deviceID);
 
+    /// @brief Send an IO frame and wait for a response. Handles authentication automatically if required by remote.
+    /// @param rawFrame string representation of the IO frame, from CTRL0 byte to last byte of data (without CRC)
+    /// @param frequency frequency to use to send the frame, in Hz
+    /// @return true if no error
+    bool SendRaw(const std::string &rawFrame, uint32_t frequency);
+
   protected:
     uint8_t mOwnNodeId[NODE_ID_SIZE]; // Our NodeID (3 bytes)
     uint8_t mSystemKey[AES_KEY_SIZE]; // Our system key (16 bytes)

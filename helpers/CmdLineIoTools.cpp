@@ -556,6 +556,46 @@ void register_ioinvertdevice(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&ioinvertdevice_cmd));
 }
 
+// ******************* IO INVERT DEVICE ********************
+
+/// @brief Structure used by the 'io_invertdevice' command
+static struct
+{
+    struct arg_str *raw_frame;
+    struct arg_int *frequency;
+    struct arg_end *end;
+} iosendraw_args;
+
+static int do_iosendraw_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&iosendraw_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, iosendraw_args.end, argv[0]);
+        return 1;
+    }
+    sIoHome->SendRaw(iosendraw_args.raw_frame->sval[0], iosendraw_args.frequency->ival[0]);
+    return 0;
+}
+
+void register_iosendraw(void)
+{
+    iosendraw_args.raw_frame = arg_str1(NULL, NULL, "<raw frame>", "String representation of an IO frame from CTRL0 to end of data (without CRC), 9 to 36 bytes.");
+    iosendraw_args.frequency = arg_int1(NULL, NULL, "<frequency>", "frequency in Hz (868950000 to send on channel 2)");
+    iosendraw_args.end = arg_end(2);
+
+    const esp_console_cmd_t iosendraw_cmd = {
+        .command = "io_sendraw",
+        .help = "Send an IO frame from given string representation and frequency, waits for response if relevant (no 'end' flag), manages authentication.",
+        .hint = NULL,
+        .func = &do_iosendraw_cmd,
+        .argtable = &iosendraw_args,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&iosendraw_cmd));
+}
+
 // ******************* IO CONFIG ********************
 
 /// @brief Structure used by the 'io_config' command
@@ -726,5 +766,6 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_ioremoveremote();
     register_iodevicefeedback();
     register_ioinvertdevice();
+    register_iosendraw();
     register_ioconfig();
 }

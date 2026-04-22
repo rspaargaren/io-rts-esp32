@@ -1207,6 +1207,51 @@ namespace iohome
     }
   }
 
+  bool IoHomeControl::SendRaw(const std::string &rawFrame, uint32_t frequency)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("SendRaw: invalid state! (not initialized or not listening or passive mode)");
+      return false;
+    }
+    if ((rawFrame.length() < 2 * FRAME_MIN_SIZE) || (rawFrame.length() > 2 * FRAME_MAX_SIZE))
+    {
+      IO_LOGE("SendRaw: invalid frame to send, must be between %d and %d bytes!", FRAME_MIN_SIZE, FRAME_MAX_SIZE);
+      return false;
+    }
+    uint8_t buffer[FRAME_MAX_SIZE];
+    HexStringToBuff(rawFrame, buffer, FRAME_MAX_SIZE);
+    IoFrame request;
+    if (parse_frame(buffer, rawFrame.length() / 2, request))
+    {
+      if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+      {
+        bool ret = false;
+        if (is_end(request))
+        {
+          ret = TransmitFrame(request, frequency, is_start(request) ? LONG_PREAMBLE_LENGTH : SHORT_PREAMBLE_LENGTH);
+        }
+        else
+        {
+          IoFrame response;
+          ret = SendAndReceive(request, response, frequency);
+        }
+        xSemaphoreGive(sMutex);
+        return ret;
+      }
+      else
+      {
+        IO_LOGE("SendRaw: failed to take mutex!");
+        return false;
+      }
+    }
+    else
+    {
+      IO_LOGE("SendRaw: parsing error, will not send frame!");
+      return false;
+    }
+  }
+
   bool IoHomeControl::TransmitFrame(const IoFrame &ioframe, uint32_t frequency, uint16_t preamble)
   {
     if (!mInitialized || !mReceiving || mPassiveMode)
