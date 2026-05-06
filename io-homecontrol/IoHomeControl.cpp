@@ -58,10 +58,14 @@ constexpr size_t LOG_MESSAGE_MAXSIZE = 256;
     IoLog(ESP_LOG_INFO, std::format(a __VA_OPT__(, ) __VA_ARGS__)); \
   } while (0)
 
+#define EVENT_BIT_RX (1 << 0) // Event bit when RxFrameQueueItem is pushed in sRxIoQueue
+#define EVENT_BIT_TX (1 << 1) // Event bit when TxFrameQueueItem is pushed in sTxIoQueue
+
 using namespace RadioLinks;
 
 namespace iohome
 {
+  static EventGroupHandle_t sEventGroup;                           // Handle for RX and TX events in RxIoQueue and TxIoQueue
   static QueueHandle_t sRadioRxFramesQueue = NULL;                 // Contains RAW frames (RadioRxFrameQueueItem) received from radio layer
   static QueueHandle_t sRxIoQueue = NULL;                          // Contains IO frames (RxFrameQueueItem) received from radio layer
   static QueueHandle_t sTxIoQueue = NULL;                          // Contains IO frames (TxFrameQueueItem) to be sent to radio layer
@@ -218,6 +222,10 @@ namespace iohome
     {
       IO_LOGE("received_frame_handler can't add received frame to queue!");
     }
+    else
+    {
+      xEventGroupSetBits(sEventGroup, EVENT_BIT_RX);
+    }
   }
 
   /// @brief Task processing received IO frames
@@ -249,7 +257,12 @@ namespace iohome
     TickType_t waitTime = CHANNEL_HOP_TIME_US * portTICK_PERIOD_MS / 1000;
     for (;;)
     {
-      if (xQueueReceive(sRadioRxFramesQueue, &item, waitTime))
+      if (uxQueueMessagesWaiting(sRadioRxFramesQueue) == 0 && uxQueueMessagesWaiting(sTxIoQueue) == 0)
+      {
+        // Wait for RX or TX event
+        xEventGroupWaitBits(sEventGroup, EVENT_BIT_RX | EVENT_BIT_TX, pdTRUE, pdFALSE, waitTime);
+      }
+      if (xQueueReceive(sRadioRxFramesQueue, &item, 0))
       {
         // Process received frame
         RxFrameQueueItem rxFrame;
@@ -284,7 +297,7 @@ namespace iohome
                && (ioHome->mRadio->isSyncWordDetected() || ioHome->mRadio->isPreambleDetected())) // Preamble or sync word detected
       {
         waitTime = CHANNEL_PREAMBLE_TIME_US * portTICK_PERIOD_MS / 1000; // We will see soon if frame arrives...
-        // IO_LOGI("process_radio_task: Preamble detected");
+        // IO_LOGI("process_radio_task: Preamble or sync word detected");
       }
       else if (ioHome->isReceiving()                     // still receiving enabled
                && !ioHome->mRadio->isSyncWordDetected()  // No sync word detected
@@ -371,6 +384,8 @@ namespace iohome
     // Initialize mutex
     sMutex = xSemaphoreCreateMutexStatic(&sMutexBuffer);
 
+    // create event group
+    sEventGroup = xEventGroupCreate();
     // create queue to handle radio frames
     sRadioRxFramesQueue = xQueueCreate(10, sizeof(RadioRxFrameQueueItem));
     // create queues to handle IO frames
@@ -1390,6 +1405,7 @@ namespace iohome
       IO_LOGE("TransmitFrame can't add frame to queue!");
       return false;
     }
+    xEventGroupSetBits(sEventGroup, EVENT_BIT_TX);
     return true;
   }
 
