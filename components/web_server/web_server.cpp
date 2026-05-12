@@ -652,6 +652,7 @@ void web_server_start(void *ioRtsManager)
     // Start HTTP server
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
+    config.task_priority = tskIDLE_PRIORITY + 3; // below radio (8), IO processing (6), status updates (4)
     config.max_uri_handlers = 16;
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.enable_so_linger = false;
