@@ -96,16 +96,16 @@ void web_server_broadcast_position(const char *device_id, int position, bool is_
 void web_server_broadcast_log(const char *message)
 {
     if (!s_server) return;
-    // Escape the message minimally (replace " with ')
-    char buf[256];
+    char escaped[200];
     int j = 0;
-    buf[j++] = '{'; buf[j++] = '"'; buf[j++] = 't'; buf[j++] = 'y'; buf[j++] = 'p'; buf[j++] = 'e'; buf[j++] = '"'; buf[j++] = ':'; buf[j++] = '"'; buf[j++] = 'l'; buf[j++] = 'o'; buf[j++] = 'g'; buf[j++] = '"'; buf[j++] = ','; buf[j++] = '"'; buf[j++] = 'm'; buf[j++] = 's'; buf[j++] = 'g'; buf[j++] = '"'; buf[j++] = ':'; buf[j++] = '"';
-    for (int i = 0; message[i] && j < (int)sizeof(buf) - 3; i++) {
+    for (int i = 0; message[i] && j < (int)sizeof(escaped) - 1; i++) {
         char c = message[i];
         if (c == '"') c = '\'';
-        buf[j++] = c;
+        escaped[j++] = c;
     }
-    buf[j++] = '"'; buf[j++] = '}'; buf[j] = '\0';
+    escaped[j] = '\0';
+    char buf[256];
+    snprintf(buf, sizeof(buf), "{\"type\":\"log\",\"message\":\"%s\"}", escaped);
     for (int i = 0; i < WS_MAX_CLIENTS; i++)
         if (s_ws_fds[i] != -1) ws_send_str(s_ws_fds[i], buf);
 }

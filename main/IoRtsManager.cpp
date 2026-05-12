@@ -3,6 +3,7 @@
 #include "MqttConfig.hpp"
 #include "IoHomeConfig.hpp"
 #include "DeviceStorage.hpp"
+#include "web_server.h"
 
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -114,6 +115,10 @@ namespace IoRts
                 }
             }
             sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
+#if CONFIG_WEB_ENABLED
+            if (device.position != iohome::UNKNOWN_POSITION)
+                web_server_broadcast_position(deviceID.c_str(), (int)device.position, device.is_stopped);
+#endif
             // send MQTT messages
             if (sMqttHelper != nullptr)
             {
