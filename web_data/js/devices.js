@@ -111,11 +111,6 @@
 
                 deviceList.appendChild(listItem);
                 if (device.position >= 0) updateDeviceFill(device.id, device.position);
-
-                const option = document.createElement("option");
-                option.value = device.id;
-                option.textContent = device.name;
-                deviceSelect.appendChild(option);
             });
 
             app.logStatus("Device list updated.", "info");
