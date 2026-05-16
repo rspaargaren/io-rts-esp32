@@ -9,8 +9,9 @@
     function updateDeviceFill(deviceId, percent) {
         const deviceEl = document.querySelector('.device[data-id="' + deviceId + '"]');
         if (!deviceEl) return;
+        const fill = 100 - percent;
         deviceEl.style.background = "linear-gradient(to top, var(--color-input) " +
-            percent + "%, var(--color-accent3) " + percent + "%)";
+            fill + "%, var(--color-accent3) " + fill + "%)";
     }
 
     function createDeviceButton(label, className, onClick) {
