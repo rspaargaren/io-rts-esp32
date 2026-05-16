@@ -72,6 +72,10 @@ static int web_log_vprintf(const char *fmt, va_list args)
     va_copy(copy, args);
     int ret = s_orig_vprintf(fmt, args);
     if (s_log_queue) {
+        bool has_clients = false;
+        for (int i = 0; i < WS_MAX_CLIENTS; i++)
+            if (s_ws_fds[i] != -1) { has_clients = true; break; }
+        if (!has_clients) { va_end(copy); return ret; }
         char raw[LOG_LINE_MAX];
         vsnprintf(raw, sizeof(raw), fmt, copy);
         char line[LOG_LINE_MAX];
