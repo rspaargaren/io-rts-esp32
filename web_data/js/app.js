@@ -186,7 +186,7 @@
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === "log") {
-                    app.logStatus(data.message, data.level || "info");
+                    app.logStatus(data.message, data.level || "debug");
                 } else if (data.type === "position") {
                     app.updateDeviceFill(data.id, data.position);
                 } else if (data.type === "init") {

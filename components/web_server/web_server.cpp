@@ -211,9 +211,25 @@ void web_server_broadcast_position(const char *device_id, int position, bool is_
         if (s_ws_fds[i] != -1) ws_send_str(s_ws_fds[i], buf);
 }
 
+// Classify a log line as "error", "info", or "debug" for the web log filter.
+// ESP log lines start with E/W/I/D/V followed by ' (timestamp) tag: message'.
+static const char *log_classify(const char *line)
+{
+    char lvl = line[0];
+    if (lvl == 'E' || lvl == 'W') return "error";
+    if (lvl == 'I') {
+        // ioRtsMan: device status callbacks — shown for all device events
+        if (strstr(line, ") ioRtsMan:")) return "info";
+        // io-hctrl: command 04 is the device's final position/status acknowledgement
+        if (strstr(line, ") io-hctrl:") && strstr(line, "command 04")) return "info";
+    }
+    return "debug";
+}
+
 void web_server_broadcast_log(const char *message)
 {
     if (!s_server) return;
+    const char *level = log_classify(message);
     char escaped[200];
     int j = 0;
     for (int i = 0; message[i] && j < (int)sizeof(escaped) - 1; i++) {
@@ -222,8 +238,8 @@ void web_server_broadcast_log(const char *message)
         escaped[j++] = c;
     }
     escaped[j] = '\0';
-    char buf[256];
-    snprintf(buf, sizeof(buf), "{\"type\":\"log\",\"message\":\"%s\"}", escaped);
+    char buf[280];
+    snprintf(buf, sizeof(buf), "{\"type\":\"log\",\"level\":\"%s\",\"message\":\"%s\"}", level, escaped);
     for (int i = 0; i < WS_MAX_CLIENTS; i++)
         if (s_ws_fds[i] != -1) ws_send_str(s_ws_fds[i], buf);
 }
