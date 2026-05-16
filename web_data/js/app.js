@@ -194,7 +194,10 @@
                 }
             } catch (e) { /* ignore malformed frames */ }
         };
-        ws.onopen = function () { app.logStatus("WebSocket connected", "info"); };
+        ws.onopen = function () {
+            ws.send('{"type":"hello"}');
+            app.logStatus("WebSocket connected", "info");
+        };
         ws.onclose = function () { app.logStatus("WebSocket disconnected", "error"); };
         app.state.ws = ws;
     }

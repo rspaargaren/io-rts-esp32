@@ -7,9 +7,14 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include <format>
 #include <list>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 
 #include "DeviceStorage.hpp"
 
@@ -31,16 +36,98 @@ static IoRts::IoRtsManager *s_manager = nullptr;
 static httpd_handle_t       s_server  = nullptr;
 static int s_ws_fds[WS_MAX_CLIENTS];
 
+// Diagnostic: track last WS upgrade fd and init frame result
+static int  s_diag_last_fd       = -99;
+static int  s_diag_init_err      = -99;
+static int  s_diag_recv_err      = -99;  // non-GET recv error
+static int  s_diag_recv_fd       = -99;
+static int  s_diag_handler_calls = 0;    // incremented at top of ws_handler every call
+static int  s_diag_last_method   = -99;  // req->method at top of ws_handler
+
+// ─── Log forwarding (esp_log_set_vprintf → WebSocket) ───────────────────────
+
+#define LOG_QUEUE_DEPTH  32
+#define LOG_LINE_MAX     180
+
+static QueueHandle_t        s_log_queue      = nullptr;
+static vprintf_like_t       s_orig_vprintf   = nullptr;
+
+static void strip_ansi(const char *src, char *dst, size_t dst_size)
+{
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j < dst_size - 1; i++) {
+        if ((uint8_t)src[i] == 0x1B && src[i + 1] == '[') {
+            i += 2;
+            while (src[i] && src[i] != 'm') i++;
+        } else {
+            dst[j++] = src[i];
+        }
+    }
+    dst[j] = '\0';
+}
+
+static int web_log_vprintf(const char *fmt, va_list args)
+{
+    va_list copy;
+    va_copy(copy, args);
+    int ret = s_orig_vprintf(fmt, args);
+    if (s_log_queue) {
+        char raw[LOG_LINE_MAX];
+        vsnprintf(raw, sizeof(raw), fmt, copy);
+        char line[LOG_LINE_MAX];
+        strip_ansi(raw, line, sizeof(line));
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+        if (len > 0)
+            xQueueSend(s_log_queue, line, 0);
+    }
+    va_end(copy);
+    return ret;
+}
+
+static void log_drain_task(void *)
+{
+    char line[LOG_LINE_MAX];
+    while (true) {
+        if (xQueueReceive(s_log_queue, line, portMAX_DELAY) == pdTRUE)
+            web_server_broadcast_log(line);
+    }
+}
+
 // ─── WebSocket ──────────────────────────────────────────────────────────────
+
+// Job queued to the httpd task so the send always happens in the right context.
+struct ws_send_job {
+    int    fd;
+    size_t len;
+    char   buf[]; // flexible array — payload follows the struct
+};
+
+static void ws_send_job_fn(void *arg)
+{
+    ws_send_job *job = static_cast<ws_send_job *>(arg);
+    httpd_ws_frame_t frame = {};
+    frame.type    = HTTPD_WS_TYPE_TEXT;
+    frame.payload = (uint8_t *)job->buf;
+    frame.len     = job->len;
+    esp_err_t err = httpd_ws_send_frame_async(s_server, job->fd, &frame);
+    // Log but keep fd registered so /api/debug can report the error
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "ws_send fd=%d err=%s", job->fd, esp_err_to_name(err));
+    free(job);
+}
 
 static void ws_send_str(int fd, const char *str)
 {
-    httpd_ws_frame_t frame = {};
-    frame.type    = HTTPD_WS_TYPE_TEXT;
-    frame.payload = (uint8_t *)str;
-    frame.len     = strlen(str);
-    esp_err_t err = httpd_ws_send_frame_async(s_server, fd, &frame);
-    if (err != ESP_OK) {
+    size_t len = strlen(str);
+    ws_send_job *job = static_cast<ws_send_job *>(malloc(sizeof(ws_send_job) + len + 1));
+    if (!job) return;
+    job->fd  = fd;
+    job->len = len;
+    memcpy(job->buf, str, len + 1);
+    if (httpd_queue_work(s_server, ws_send_job_fn, job) != ESP_OK) {
+        free(job);
         for (int i = 0; i < WS_MAX_CLIENTS; i++)
             if (s_ws_fds[i] == fd) { s_ws_fds[i] = -1; break; }
     }
@@ -62,22 +149,53 @@ static void ws_add_client(int fd)
 
 static esp_err_t ws_handler(httpd_req_t *req)
 {
-    if (req->method == HTTP_GET) {
-        ws_add_client(httpd_req_to_sockfd(req));
+    s_diag_handler_calls++;
+    s_diag_last_method = (int)req->method;
+
+    int fd = httpd_req_to_sockfd(req);
+
+    // Detect new client by absence in s_ws_fds (req->method is 0 for WS frames in
+    // esp-idf, not HTTP_GET=1, so we cannot use the method to distinguish first call).
+    bool is_new = true;
+    for (int i = 0; i < WS_MAX_CLIENTS; i++)
+        if (s_ws_fds[i] == fd) { is_new = false; break; }
+
+    if (is_new) {
+        s_diag_last_fd = fd;
+        for (int i = 0; i < WS_MAX_CLIENTS; i++) {
+            if (s_ws_fds[i] == -1) { s_ws_fds[i] = fd; break; }
+        }
+        // Drain the trigger frame (browser sends {"type":"hello"} on open)
+        httpd_ws_frame_t hello = {};
+        httpd_ws_recv_frame(req, &hello, 0);
+        if (hello.len > 0) {
+            uint8_t *buf = (uint8_t *)malloc(hello.len + 1);
+            if (buf) { hello.payload = buf; httpd_ws_recv_frame(req, &hello, hello.len); free(buf); }
+        }
+        ESP_LOGI(TAG, "WS new client fd=%d", fd);
+        ws_send_str(fd, "{\"type\":\"init\"}");
         return ESP_OK;
     }
+
+    // Existing client — drain the incoming frame
     httpd_ws_frame_t frame = {};
-    frame.type = HTTPD_WS_TYPE_TEXT;
     esp_err_t err = httpd_ws_recv_frame(req, &frame, 0);
     if (err != ESP_OK) {
-        int fd = httpd_req_to_sockfd(req);
+        s_diag_recv_err = (int)err;
+        s_diag_recv_fd  = fd;
+        ESP_LOGW(TAG, "WS recv err fd=%d: %s", fd, esp_err_to_name(err));
         for (int i = 0; i < WS_MAX_CLIENTS; i++)
             if (s_ws_fds[i] == fd) { s_ws_fds[i] = -1; break; }
         return err;
     }
     if (frame.len > 0) {
         uint8_t *buf = (uint8_t *)malloc(frame.len + 1);
-        if (buf) { httpd_ws_recv_frame(req, &frame, frame.len); free(buf); }
+        if (buf) {
+            frame.payload = buf;
+            httpd_ws_recv_frame(req, &frame, frame.len);
+            frame.payload = nullptr;
+            free(buf);
+        }
     }
     return ESP_OK;
 }
@@ -326,6 +444,50 @@ static esp_err_t api_action_post(httpd_req_t *req)
 
     cJSON_Delete(json);
     send_result(req, ok, ok ? "OK" : "Action failed");
+    return ESP_OK;
+}
+
+// ─── GET /api/debug ─────────────────────────────────────────────────────────
+
+static esp_err_t api_debug_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON *fds_arr = cJSON_AddArrayToObject(obj, "ws_fds");
+    int active = 0;
+    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
+        cJSON_AddItemToArray(fds_arr, cJSON_CreateNumber(s_ws_fds[i]));
+        if (s_ws_fds[i] != -1) active++;
+    }
+    cJSON_AddNumberToObject(obj, "ws_active", active);
+    cJSON_AddBoolToObject(obj, "log_queue_ok", s_log_queue != nullptr);
+    cJSON_AddNumberToObject(obj, "diag_last_fd",   s_diag_last_fd);
+    cJSON_AddNumberToObject(obj, "diag_init_err",  s_diag_init_err);
+    cJSON_AddStringToObject(obj, "diag_init_err_s", esp_err_to_name((esp_err_t)s_diag_init_err));
+    cJSON_AddNumberToObject(obj, "diag_recv_err",  s_diag_recv_err);
+    cJSON_AddStringToObject(obj, "diag_recv_err_s", esp_err_to_name((esp_err_t)s_diag_recv_err));
+    cJSON_AddNumberToObject(obj, "diag_recv_fd",      s_diag_recv_fd);
+    cJSON_AddNumberToObject(obj, "diag_handler_calls", s_diag_handler_calls);
+    cJSON_AddNumberToObject(obj, "diag_last_method",   s_diag_last_method);
+    // Try sending a test frame to all clients and report results
+    cJSON *results = cJSON_AddArrayToObject(obj, "send_results");
+    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
+        if (s_ws_fds[i] == -1) continue;
+        const char *test_msg = "{\"type\":\"debug_ping\"}";
+        httpd_ws_frame_t frame = {};
+        frame.type    = HTTPD_WS_TYPE_TEXT;
+        frame.payload = (uint8_t *)test_msg;
+        frame.len     = strlen(test_msg);
+        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fds[i], &frame);
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddNumberToObject(r, "fd", s_ws_fds[i]);
+        cJSON_AddStringToObject(r, "err", esp_err_to_name(err));
+        cJSON_AddItemToArray(results, r);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "debug send fd=%d err=%s", s_ws_fds[i], esp_err_to_name(err));
+            s_ws_fds[i] = -1;
+        }
+    }
+    send_json(req, obj);
     return ESP_OK;
 }
 
@@ -684,6 +846,7 @@ void web_server_start(void *ioRtsManager)
     }
 
     // API routes (before wildcard)
+    reg("/api/debug",             HTTP_GET,  api_debug_get);
     reg("/api/devices",           HTTP_GET,  api_devices_get);
     reg("/api/remotes",           HTTP_GET,  api_remotes_get);
     reg("/api/action",            HTTP_POST, api_action_post);
@@ -696,6 +859,11 @@ void web_server_start(void *ioRtsManager)
 
     // Wildcard catch-all for static files
     reg("/*", HTTP_GET, static_file_handler);
+
+    // Start log forwarding to WebSocket clients
+    s_log_queue = xQueueCreate(LOG_QUEUE_DEPTH, LOG_LINE_MAX);
+    xTaskCreate(log_drain_task, "log_drain", 2048, nullptr, 1, nullptr);
+    s_orig_vprintf = esp_log_set_vprintf(web_log_vprintf);
 
     ESP_LOGI(TAG, "HTTP server started");
 }
