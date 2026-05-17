@@ -385,6 +385,17 @@ menu "IO RTS Project Configuration"
 
     endmenu
 
+    menu "Web Server Configuration"
+
+        config WEB_ENABLED
+            bool "Enable web server"
+            default y
+            help
+                Enable the built-in HTTP/WebSocket server. Disable to save flash and RAM
+                on builds that only use MQTT.
+
+    endmenu
+
     menu "OLED Display Configuration"
 
         config OLED_ENABLED

@@ -3,6 +3,7 @@
 #include "MqttConfig.hpp"
 #include "IoHomeConfig.hpp"
 #include "DeviceStorage.hpp"
+#include "web_server.h"
 
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -37,6 +38,9 @@ namespace IoRts
             break;
         }
         if (sMqttHelper != nullptr) sMqttHelper->SendLog(std::format("{} {}: {}", level, tag, log));
+#if CONFIG_WEB_ENABLED
+        web_server_broadcast_log(std::format("{} {}: {}", level, tag, log).c_str());
+#endif
     }
 
     static void deviceStatusCallback(const std::string deviceID, const iohome::IoDevice &device)
@@ -114,6 +118,10 @@ namespace IoRts
                 }
             }
             sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
+#if CONFIG_WEB_ENABLED
+            if (device.position != iohome::UNKNOWN_POSITION)
+                web_server_broadcast_position(deviceID.c_str(), (int)device.position, device.is_stopped);
+#endif
             // send MQTT messages
             if (sMqttHelper != nullptr)
             {

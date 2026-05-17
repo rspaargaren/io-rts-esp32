@@ -6,6 +6,7 @@
 #include "IoRtsManager.hpp"
 #include "CmdLineManagement.hpp"
 #include "oled_display.h"
+#include "web_server.h"
 
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -51,6 +52,10 @@ extern "C" void app_main(void)
 
     // Initialize Manager
     IoRts::IoRtsManager ioRtsManager = IoRts::IoRtsManager();
+
+#if CONFIG_WEB_ENABLED
+    web_server_start(&ioRtsManager);
+#endif
 
     // Initialize commands line tools
     init_cmdline(&ioRtsManager);
