@@ -23,6 +23,9 @@ extern "C"
     /// @brief Register MQTT configuration command line tools
     void register_mqtt_config_cmdline_tools();
 
+    /// @brief Register syslog configuration command line tools
+    void register_syslog_config_cmdline_tools();
+
     /// @brief Register command line tools
     /// @param io_rts_manager Pointer to IoRtsManager object
     void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager);

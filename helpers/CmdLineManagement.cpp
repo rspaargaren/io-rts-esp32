@@ -223,6 +223,7 @@ void init_cmdline_tools()
     register_misc_cmdline_tools();
     register_network_config_cmdline_tools();
     register_mqtt_config_cmdline_tools();
+    register_syslog_config_cmdline_tools();
 
     printf("\n ==============================================================\n");
     printf(" |            Steps to Use io-rts-esp32                       |\n");

@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "web_server.cpp"
+    SRCS "web_server.cpp" "syslog.cpp"
     INCLUDE_DIRS "include"
     REQUIRES esp_http_server esp_netif joltwallet__littlefs espressif__cjson espressif__mqtt nvs_flash esp_driver_spi esp_driver_gpio mbedtls
 )

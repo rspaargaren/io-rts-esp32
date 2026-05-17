@@ -1,5 +1,6 @@
 #include "SyslogConfig.hpp"
 #include "NvsHelpers.hpp"
+#include "sdkconfig.h"
 
 using namespace Helpers;
 
@@ -23,7 +24,11 @@ namespace Config
 
     bool SyslogConfig::isEnabled()
     {
+#ifdef CONFIG_SYSLOG_ENABLED
+        uint8_t enabled = CONFIG_SYSLOG_ENABLED ? 1 : 0;
+#else
         uint8_t enabled = 0;
+#endif
         NvsHelpers::GetValue(SYSLOG_NAMESPACE, SYSLOG_ENABLED, enabled);
         return enabled != 0;
     }
@@ -36,7 +41,11 @@ namespace Config
 
     const std::string SyslogConfig::GetServer()
     {
+#ifdef CONFIG_SYSLOG_SERVER
+        std::string server = CONFIG_SYSLOG_SERVER;
+#else
         std::string server = "";
+#endif
         NvsHelpers::GetString(SYSLOG_NAMESPACE, SYSLOG_SERVER, server);
         return server;
     }
@@ -48,7 +57,11 @@ namespace Config
 
     uint16_t SyslogConfig::GetPort()
     {
+#ifdef CONFIG_SYSLOG_PORT
+        uint16_t port = CONFIG_SYSLOG_PORT;
+#else
         uint16_t port = 514;
+#endif
         NvsHelpers::GetValue(SYSLOG_NAMESPACE, SYSLOG_PORT, port);
         return port;
     }
@@ -62,7 +75,11 @@ namespace Config
 
     uint8_t SyslogConfig::GetFacility()
     {
+#ifdef CONFIG_SYSLOG_FACILITY
+        uint8_t facility = CONFIG_SYSLOG_FACILITY;
+#else
         uint8_t facility = 1;
+#endif
         NvsHelpers::GetValue(SYSLOG_NAMESPACE, SYSLOG_FACILITY, facility);
         return facility;
     }
@@ -76,7 +93,11 @@ namespace Config
 
     uint8_t SyslogConfig::GetMinLevel()
     {
+#ifdef CONFIG_SYSLOG_MIN_LEVEL
+        uint8_t level = CONFIG_SYSLOG_MIN_LEVEL;
+#else
         uint8_t level = 7;
+#endif
         NvsHelpers::GetValue(SYSLOG_NAMESPACE, SYSLOG_MIN_LEVEL, level);
         return level;
     }

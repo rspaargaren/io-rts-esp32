@@ -17,10 +17,12 @@
 #include "freertos/task.h"
 
 #include "DeviceStorage.hpp"
+#include "syslog.h"
 
 #include "IoRtsManager.hpp"
 #include "iohome_device.hpp"
 #include "MqttConfig.hpp"
+#include "SyslogConfig.hpp"
 
 #if CONFIG_WEB_ENABLED
 
@@ -75,7 +77,7 @@ static int web_log_vprintf(const char *fmt, va_list args)
         bool has_clients = false;
         for (int i = 0; i < WS_MAX_CLIENTS; i++)
             if (s_ws_fds[i] != -1) { has_clients = true; break; }
-        if (!has_clients) { va_end(copy); return ret; }
+        if (!has_clients && !syslog_is_active()) { va_end(copy); return ret; }
         char raw[LOG_LINE_MAX];
         vsnprintf(raw, sizeof(raw), fmt, copy);
         char line[LOG_LINE_MAX];
@@ -94,8 +96,10 @@ static void log_drain_task(void *)
 {
     char line[LOG_LINE_MAX];
     while (true) {
-        if (xQueueReceive(s_log_queue, line, portMAX_DELAY) == pdTRUE)
+        if (xQueueReceive(s_log_queue, line, portMAX_DELAY) == pdTRUE) {
             web_server_broadcast_log(line);
+            syslog_send(line);
+        }
     }
 }
 
@@ -568,6 +572,52 @@ static esp_err_t api_mqtt_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── GET /api/syslog ────────────────────────────────────────────────────────
+
+static esp_err_t api_syslog_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddBoolToObject  (obj, "enabled",   Config::SyslogConfig::isEnabled());
+    cJSON_AddStringToObject(obj, "server",    Config::SyslogConfig::GetServer().c_str());
+    cJSON_AddNumberToObject(obj, "port",      Config::SyslogConfig::GetPort());
+    cJSON_AddNumberToObject(obj, "facility",  Config::SyslogConfig::GetFacility());
+    cJSON_AddNumberToObject(obj, "min_level", Config::SyslogConfig::GetMinLevel());
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/syslog ───────────────────────────────────────────────────────
+
+static esp_err_t api_syslog_post(httpd_req_t *req)
+{
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) {
+        send_result(req, false, "Failed to read body");
+        return ESP_OK;
+    }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jEnabled  = cJSON_GetObjectItem(json, "enabled");
+    cJSON *jServer   = cJSON_GetObjectItem(json, "server");
+    cJSON *jPort     = cJSON_GetObjectItem(json, "port");
+    cJSON *jFacility = cJSON_GetObjectItem(json, "facility");
+    cJSON *jMinLevel = cJSON_GetObjectItem(json, "min_level");
+
+    if (cJSON_IsBool(jEnabled))   Config::SyslogConfig::SetEnabled(cJSON_IsTrue(jEnabled));
+    if (cJSON_IsString(jServer))  Config::SyslogConfig::SetServer(jServer->valuestring);
+    if (cJSON_IsNumber(jPort))    Config::SyslogConfig::SetPort((uint16_t)jPort->valuedouble);
+    if (cJSON_IsNumber(jFacility)) Config::SyslogConfig::SetFacility((uint8_t)jFacility->valuedouble);
+    if (cJSON_IsNumber(jMinLevel)) Config::SyslogConfig::SetMinLevel((uint8_t)jMinLevel->valuedouble);
+
+    cJSON_Delete(json);
+    syslog_apply_config();
+    send_result(req, true, "Syslog config saved");
+    return ESP_OK;
+}
+
 // ─── Download / Upload helpers ──────────────────────────────────────────────
 
 static esp_err_t read_multipart_content(httpd_req_t *req, char **out)
@@ -874,6 +924,8 @@ void web_server_start(void *ioRtsManager)
     reg("/api/action",            HTTP_POST, api_action_post);
     reg("/api/mqtt",              HTTP_GET,  api_mqtt_get);
     reg("/api/mqtt",              HTTP_POST, api_mqtt_post);
+    reg("/api/syslog",            HTTP_GET,  api_syslog_get);
+    reg("/api/syslog",            HTTP_POST, api_syslog_post);
     reg("/api/download/devices",  HTTP_GET,  api_download_devices);
     reg("/api/download/remotes",  HTTP_GET,  api_download_remotes);
     reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
@@ -884,8 +936,10 @@ void web_server_start(void *ioRtsManager)
 
     // Start log forwarding to WebSocket clients
     s_log_queue = xQueueCreate(LOG_QUEUE_DEPTH, LOG_LINE_MAX);
-    xTaskCreate(log_drain_task, "log_drain", 2048, nullptr, 1, nullptr);
+    xTaskCreate(log_drain_task, "log_drain", 4096, nullptr, 1, nullptr);
     s_orig_vprintf = esp_log_set_vprintf(web_log_vprintf);
+
+    syslog_init(CONFIG_IP_LAYER_HOSTNAME);
 
     ESP_LOGI(TAG, "HTTP server started");
 }

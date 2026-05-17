@@ -394,6 +394,50 @@ menu "IO RTS Project Configuration"
                 Enable the built-in HTTP/WebSocket server. Disable to save flash and RAM
                 on builds that only use MQTT.
 
+        menu "Syslog Configuration"
+            depends on WEB_ENABLED
+
+            config SYSLOG_ENABLED
+                bool "Enable remote syslog"
+                default n
+                help
+                    Forward ESP log output to a remote UDP syslog server (RFC 3164).
+                    Settings can also be changed at runtime via the web UI or config_syslog command.
+
+            config SYSLOG_SERVER
+                string "Syslog server hostname or IP"
+                default ""
+                depends on SYSLOG_ENABLED
+                help
+                    Hostname or IP address of the syslog server (e.g. 192.168.1.10).
+
+            config SYSLOG_PORT
+                int "Syslog UDP port"
+                range 1 65535
+                default 514
+                depends on SYSLOG_ENABLED
+                help
+                    UDP port of the syslog server. Standard port is 514.
+
+            config SYSLOG_FACILITY
+                int "Syslog facility number (0-23)"
+                range 0 23
+                default 1
+                depends on SYSLOG_ENABLED
+                help
+                    RFC 3164 facility: 0=kern 1=user 2=mail 3=daemon 16-23=local0-7.
+
+            config SYSLOG_MIN_LEVEL
+                int "Minimum severity to forward (0-7)"
+                range 0 7
+                default 7
+                depends on SYSLOG_ENABLED
+                help
+                    RFC 5424 severity threshold: 3=error 4=warning 6=info 7=debug.
+                    Messages with severity higher than this value are dropped.
+
+        endmenu
+
     endmenu
 
     menu "OLED Display Configuration"
