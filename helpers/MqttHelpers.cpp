@@ -2,6 +2,7 @@
 #include "MqttConfig.hpp"
 #include "IoHomeConfig.hpp"
 #include "DeviceStorage.hpp"
+#include "NetworkHelpers.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -9,7 +10,16 @@
 #include "cJSON.h"
 
 #include "esp_app_desc.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+
+#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+#include "esp_wifi.h"
+#endif
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+#include "esp_eth.h"
+#endif
 
 using namespace Config;
 using namespace iohome;
@@ -59,6 +69,29 @@ static const char *TAG = "MQTTHelper";
 
 namespace Helpers
 {
+    static void mqtt_reconnect_timer_cb(void *arg)
+    {
+        static_cast<MqttHelpers *>(arg)->OnNetworkConnected();
+    }
+
+    static void mqtt_network_event_handler(void *handler_args, esp_event_base_t event_base,
+                                           int32_t event_id, void *event_data)
+    {
+        MqttHelpers *mqttHelper = static_cast<MqttHelpers *>(handler_args);
+#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+        if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+            mqttHelper->OnNetworkDisconnected();
+        else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+            mqttHelper->OnNetworkConnected();
+#endif
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+        if (event_base == ETH_EVENT && event_id == ETHERNET_EVENT_DISCONNECTED)
+            mqttHelper->OnNetworkDisconnected();
+        else if (event_base == IP_EVENT && event_id == IP_EVENT_ETH_GOT_IP)
+            mqttHelper->OnNetworkConnected();
+#endif
+    }
+
     /// @brief Event handler registered to receive MQTT events
     /// @param handler_args user data registered to the event => MqttHelpers object
     /// @param base Event base for the handler(always MQTT Base)
@@ -113,6 +146,18 @@ namespace Helpers
                 for (const std::string &id : activeIDs)
                     mqttHelper->PublishDeviceRemotesList(id);
             }
+            // Re-publish current state of all active devices so HA is immediately up-to-date
+            {
+                std::vector<std::string> activeIDs;
+                {
+                    std::lock_guard<std::mutex> guard(mqttHelper->GetIoRtsManager()->mIoDevicesMutex);
+                    for (const auto &[id, dev] : mqttHelper->GetIoRtsManager()->mIoDevices)
+                        if (!dev.is_deleted)
+                            activeIDs.push_back(id);
+                }
+                for (const std::string &id : activeIDs)
+                    mqttHelper->SendIoDeviceStatus(id);
+            }
             // subscribe to all command topics
             topic = mqttHelper->GetTopicPrefix() + "/+" + MQTT_CLIENT_COMMAND_TOPIC;
             msg_id = esp_mqtt_client_subscribe(client, topic.c_str(), 0);
@@ -126,6 +171,7 @@ namespace Helpers
         }
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+            mqttHelper->OnMqttDisconnected();
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
@@ -519,7 +565,7 @@ namespace Helpers
     }
 
     MqttHelpers::MqttHelpers(IoRts::IoRtsManager *manager)
-        : mIoRtsManager(manager), mStarted(false), mMqttClientHandle(nullptr)
+        : mIoRtsManager(manager), mStarted(false), mMqttClientHandle(nullptr), mReconnectTimer(nullptr)
     {
         mIsIoHomePassive = IoHomeConfig::isPassiveModeEnabled();
         mTopicPrefix = MqttConfig::GetTopicPrefix();
@@ -551,11 +597,23 @@ namespace Helpers
         mqtt_cfg.session.last_will.msg_len = MQTT_CLIENT_WILL_MSG.length();
         mqtt_cfg.session.last_will.qos = 1;
         mqtt_cfg.session.last_will.retain = true;
-        mqtt_cfg.network.disable_auto_reconnect = false;
+        mqtt_cfg.network.disable_auto_reconnect = true;
         mMqttClientHandle = esp_mqtt_client_init(&mqtt_cfg);
         if (mMqttClientHandle == NULL)
         {
             ESP_LOGE(TAG, "Failed to create MQTT client!");
+            return ESP_FAIL;
+        }
+        // Create one-shot reconnect timer (fires when broker drops but WiFi is still up)
+        esp_timer_create_args_t timer_args = {};
+        timer_args.callback = mqtt_reconnect_timer_cb;
+        timer_args.arg = this;
+        timer_args.name = "mqtt_reconnect";
+        if (esp_timer_create(&timer_args, &mReconnectTimer) != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Failed to create MQTT reconnect timer!");
+            esp_mqtt_client_destroy(mMqttClientHandle);
+            mMqttClientHandle = nullptr;
             return ESP_FAIL;
         }
         // Register event handler
@@ -563,15 +621,28 @@ namespace Helpers
         if (err != ESP_OK)
         {
             ESP_LOGE(TAG, "Failed to register MQTT event handler! (%d)", err);
+            esp_timer_delete(mReconnectTimer);
+            mReconnectTimer = nullptr;
             esp_mqtt_client_destroy(mMqttClientHandle);
             mMqttClientHandle = nullptr;
             return ESP_FAIL;
         }
+        // Register network event handlers to coordinate MQTT reconnect with WiFi/Ethernet state
+#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &mqtt_network_event_handler, this);
+        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &mqtt_network_event_handler, this);
+#endif
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+        esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &mqtt_network_event_handler, this);
+        esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &mqtt_network_event_handler, this);
+#endif
         // Start
         err = esp_mqtt_client_start(mMqttClientHandle);
         if (err != ESP_OK)
         {
             ESP_LOGE(TAG, "Failed to start MQTT client! (%d)", err);
+            esp_timer_delete(mReconnectTimer);
+            mReconnectTimer = nullptr;
             esp_mqtt_client_destroy(mMqttClientHandle);
             mMqttClientHandle = nullptr;
             return ESP_FAIL;
@@ -1434,5 +1505,33 @@ namespace Helpers
             return;
         std::string topic = mTopicPrefix + MQTT_CLIENT_LOG_TOPIC;
         esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), log.c_str(), 0, 0, 0);
+    }
+    void MqttHelpers::OnNetworkConnected()
+    {
+        if (!mStarted || mMqttClientHandle == nullptr)
+            return;
+        esp_timer_stop(mReconnectTimer); // cancel any pending broker-drop retry
+        ESP_LOGI(TAG, "Network up — triggering MQTT reconnect");
+        esp_mqtt_client_reconnect(mMqttClientHandle);
+    }
+    void MqttHelpers::OnNetworkDisconnected()
+    {
+        if (!mStarted || mReconnectTimer == nullptr)
+            return;
+        ESP_LOGI(TAG, "Network down — cancelling MQTT reconnect timer");
+        esp_timer_stop(mReconnectTimer);
+    }
+    void MqttHelpers::OnMqttDisconnected()
+    {
+        if (!mStarted || mMqttClientHandle == nullptr || mReconnectTimer == nullptr)
+            return;
+        if (NetworkHelpers::isConnected())
+        {
+            // WiFi is up — broker dropped independently; retry in 5 seconds
+            esp_timer_stop(mReconnectTimer);
+            esp_timer_start_once(mReconnectTimer, 5ULL * 1000 * 1000);
+            ESP_LOGI(TAG, "Broker unreachable — will retry in 5s");
+        }
+        // If WiFi is down, OnNetworkConnected() will trigger reconnect when IP is obtained
     }
 }

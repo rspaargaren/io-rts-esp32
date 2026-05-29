@@ -3,6 +3,7 @@
 #include <string>
 
 #include "esp_err.h"
+#include "esp_timer.h"
 
 #include "IoRtsManager.hpp"
 #include "mqtt_client.h"
@@ -54,6 +55,13 @@ namespace Helpers
         /// @param deviceID IO device ID
         void PublishDeviceRemotesList(const std::string &deviceID);
 
+        /// @brief Called when network IP is obtained — triggers MQTT reconnect
+        void OnNetworkConnected();
+        /// @brief Called when network link drops — cancels any pending MQTT reconnect timer
+        void OnNetworkDisconnected();
+        /// @brief Called on MQTT_EVENT_DISCONNECTED — schedules reconnect if network is up
+        void OnMqttDisconnected();
+
     private:
         /// @brief Send controller device discovery message (reboot, config, management components)
         void SendControllerDiscovery();
@@ -67,5 +75,6 @@ namespace Helpers
         std::string mTopicPrefix;                   // Topic prefix, initialized from configuration storage at boot (avoid to read it from storage everytime!)
         std::string mDiscoveryPrefix;               // Discovery prefix, initialized from configuration storage at boot (avoid to read it from storage everytime!)
         esp_mqtt_client_handle_t mMqttClientHandle; // Handle on MQTT client
+        esp_timer_handle_t mReconnectTimer;         // One-shot timer for broker-drop reconnect
     };
 }
