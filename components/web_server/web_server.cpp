@@ -30,6 +30,7 @@
 #include "iohome_device.hpp"
 #include "MqttConfig.hpp"
 #include "SyslogConfig.hpp"
+#include "NetworkConfig.hpp"
 
 #if CONFIG_WEB_ENABLED
 
@@ -667,6 +668,28 @@ static bool ota_check_key(httpd_req_t *req)
     return ok;
 }
 
+// ─── POST /api/wifi/reset ───────────────────────────────────────────────────
+
+static esp_err_t api_wifi_reset_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+    Config::NetworkConfig::DeleteWifiConfig();
+    ESP_LOGI(TAG, "wifi/reset: credentials wiped — restarting into provisioning AP");
+    httpd_resp_sendstr(req, "{\"status\":\"restarting\"}");
+    esp_timer_handle_t t;
+    esp_timer_create_args_t ta = {};
+    ta.callback = [](void *){ esp_restart(); };
+    ta.name = "wifi_rst";
+    if (esp_timer_create(&ta, &t) == ESP_OK)
+        esp_timer_start_once(t, 500 * 1000); // 0.5s — let the HTTP response flush
+    else
+        esp_restart();
+    return ESP_OK;
+}
+
 // ─── GET /api/ota/key ───────────────────────────────────────────────────────
 
 static esp_err_t api_ota_key_get(httpd_req_t *req)
@@ -1290,6 +1313,7 @@ void web_server_start(void *ioRtsManager)
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
     reg("/api/ota",               HTTP_POST, api_ota_post);
     reg("/api/ota/key",           HTTP_GET,  api_ota_key_get);
+    reg("/api/wifi/reset",        HTTP_POST, api_wifi_reset_post);
     reg("/api/info",              HTTP_GET,  api_info_get);
     reg("/api/upload/web*",       HTTP_POST, api_upload_web_post);
     reg("/api/pair/start",        HTTP_POST, api_pair_start_post);

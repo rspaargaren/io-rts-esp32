@@ -1,5 +1,6 @@
 #include "NetworkHelpers.hpp"
 #include "NetworkConfig.hpp"
+#include "esp_system.h"
 #include "HardwareConfig.hpp"
 
 #include "esp_netif.h"
@@ -106,6 +107,8 @@ namespace Helpers
     }
 
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+    static int sWifiRetryCount = 0;
+
     /// @brief Handler to manage Wifi events
     /// @param arg currently not used in our project, see ESP-IDF documentation
     /// @param event_base Event base, WIFI_EVENT or IP_EVENT
@@ -128,15 +131,26 @@ namespace Helpers
         {
             sIsConnected = false;
             wifi_event_sta_disconnected_t *event = (wifi_event_sta_disconnected_t *) event_data;
-            ESP_LOGE(TAG, "Connection to the AP fail! (%d)", event->reason);
-            vTaskDelay(pdMS_TO_TICKS(60000));
-            ESP_LOGI(TAG, "Retry to connect to the AP");
-            esp_wifi_connect();
+            sWifiRetryCount++;
+            ESP_LOGE(TAG, "Connection to the AP fail! (%d) — attempt %d/3", event->reason, sWifiRetryCount);
+            if (sWifiRetryCount < 3)
+            {
+                vTaskDelay(pdMS_TO_TICKS(10000));
+                ESP_LOGI(TAG, "Retry to connect to the AP");
+                esp_wifi_connect();
+            }
+            else
+            {
+                ESP_LOGE(TAG, "WiFi failed after 3 attempts — wiping credentials, starting provisioning AP");
+                Config::NetworkConfig::DeleteWifiConfig();
+                esp_restart();
+            }
         }
         else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
         {
             ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
             ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+            sWifiRetryCount = 0; // reset on successful connection
             set_sntp_from_configuration();
             start_mdns();
             sIsConnected = true;
