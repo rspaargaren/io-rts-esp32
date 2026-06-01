@@ -445,6 +445,116 @@ ul#device-list li.device.inactive {
     animation: pairing-pulse 1.4s ease-in-out infinite;
     cursor: pointer;
 }
+/* ── Settings sidebar layout ────────────────────────────────────────────── */
+.settings-layout {
+    display: flex;
+    min-height: calc(90dvh - 80px);
+}
+.settings-nav {
+    width: 160px;
+    flex-shrink: 0;
+    background: var(--color-accent);
+    padding: 12px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.settings-tab {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px 16px;
+    background: none;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 0;
+    color: rgba(255,255,255,0.65);
+    font-size: 0.88em;
+    cursor: pointer;
+    text-align: left;
+    margin: 0;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    width: 100%;
+}
+.settings-tab:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    border-left-color: rgba(255,255,255,0.4);
+}
+.settings-tab.active {
+    background: rgba(255,255,255,0.18);
+    color: #fff;
+    border-left-color: #fff;
+    font-weight: 600;
+}
+.settings-tab svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+.settings-panels {
+    flex: 1;
+    min-width: 0;
+    padding: 16px;
+    overflow-y: auto;
+}
+.settings-panel {
+    display: none;
+}
+.settings-panel.active {
+    display: block;
+    animation: panelFade 0.18s ease;
+}
+@keyframes panelFade {
+    from { opacity: 0; transform: translateY(5px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.settings-panel section + section {
+    margin-top: 16px;
+}
+.field-hint {
+    color: var(--color-text);
+    opacity: 0.55;
+    margin-top: -4px;
+    display: block;
+    font-size: 0.82em;
+}
+.field-status {
+    font-size: 0.9em;
+    margin-bottom: 6px;
+    min-height: 1em;
+    color: var(--color-text);
+}
+.restart-notice {
+    color: #e67e22;
+    font-size: 0.88em;
+    margin: 6px 0 2px;
+}
+@media (max-width: 600px) {
+    .settings-layout { flex-direction: column; }
+    .settings-nav {
+        width: 100%;
+        flex-direction: row;
+        padding: 0;
+        overflow-x: auto;
+    }
+    .settings-tab {
+        flex-direction: column;
+        gap: 3px;
+        padding: 10px 14px;
+        font-size: 0.75em;
+        border-left: none;
+        border-bottom: 3px solid transparent;
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
+    .settings-tab.active {
+        border-left-color: transparent;
+        border-bottom-color: #fff;
+    }
+    .settings-panels { padding: 10px; }
+}
+
 /* ── Sensitive section (IO system key) ─────────────────────────────────── */
 #io-key-section .title {
     background: linear-gradient(135deg, #7a1515 0%, #b00020 100%);
