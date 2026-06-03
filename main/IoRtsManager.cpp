@@ -347,23 +347,27 @@ namespace IoRts
 
         for (const auto &[deviceID, storedDevice] : storedDevices)
         {
+            // Copy transit_time_ms from storage into the in-memory device
+            iohome::IoDevice dev = storedDevice.device;
+            dev.transit_time_ms = storedDevice.transit_time_ms;
+
             // Add to our local map regardless of active/inactive state
             mIoDevicesMutex.lock();
-            mIoDevices.insert({deviceID, storedDevice.device});
+            mIoDevices.insert({deviceID, dev});
             mIoDevicesMutex.unlock();
-            if (!storedDevice.device.is_deleted)
+            if (!dev.is_deleted)
             {
                 // Only register active devices with the radio layer
-                mIoHome->RestoreDevice(deviceID, storedDevice.device);
+                mIoHome->RestoreDevice(deviceID, dev);
                 for (const std::string &remoteID : storedDevice.linked_remotes)
                     mIoHome->LinkRemoteToDevice(remoteID, deviceID);
-                ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s)",
-                         deviceID.c_str(), storedDevice.device.info.name, storedDevice.linked_remotes.size());
+                ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s), transit=%ums",
+                         deviceID.c_str(), dev.info.name, storedDevice.linked_remotes.size(), dev.transit_time_ms);
             }
             else
             {
                 ESP_LOGI(TAG, "Loaded inactive device %s (%s) — not registered with radio",
-                         deviceID.c_str(), storedDevice.device.info.name);
+                         deviceID.c_str(), dev.info.name);
             }
         }
     }
@@ -382,6 +386,30 @@ namespace IoRts
     bool IoRtsManager::IsCaptureActive() const
     {
         return sCaptureActive;
+    }
+
+    bool IoRtsManager::SetTransitTime(const std::string &deviceID, uint32_t transit_time_ms)
+    {
+        // Update in-memory device
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool found = it != mIoDevices.end();
+        if (found)
+            it->second.transit_time_ms = transit_time_ms;
+        mIoDevicesMutex.unlock();
+
+        if (!found)
+            return false;
+
+        // Persist to NVS
+        Helpers::StoredIoDevice stored;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) != ESP_OK)
+            return false;
+        stored.transit_time_ms = transit_time_ms;
+        esp_err_t err = Helpers::DeviceStorage::SaveIoDevice(deviceID, stored);
+        if (err == ESP_OK)
+            ESP_LOGI(TAG, "Transit time for %s set to %ums", deviceID.c_str(), transit_time_ms);
+        return err == ESP_OK;
     }
 
     void IoRtsManager::StartKeySniff()

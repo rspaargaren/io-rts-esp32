@@ -398,6 +398,9 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddBoolToObject(obj, "is_inverted",   dev.info.is_openclose_inverted);
         cJSON_AddBoolToObject(obj, "tilt_supported",
             iohome::deviceTypeSupportsTilt(dev.info.device_type));
+
+        cJSON_AddNumberToObject(obj, "transit_time_ms", dev.transit_time_ms);
+
         cJSON_AddItemToArray(arr, obj);
     }
     s_manager->mIoDevicesMutex.unlock();
@@ -507,6 +510,10 @@ static esp_err_t api_action_post(httpd_req_t *req)
                 send_result(req, false, "Deactivate the device first before deleting.");
                 return ESP_OK;
             }
+        }
+    } else if (strcmp(action, "setTransitTime") == 0) {
+        if (strlen(deviceId) > 0 && value >= 0) {
+            ok = s_manager->SetTransitTime(deviceId, (uint32_t)(value * 1000));
         }
     } else {
         cJSON_Delete(json);

@@ -959,6 +959,10 @@ namespace iohome
       bool ret = false;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
+      // Record movement tracking before sending so elapsed time is accurate
+      it->second.move_start_us   = esp_timer_get_time();
+      it->second.move_start_pos  = it->second.position;
+      it->second.move_target_pos = (float)position;
       if (create_execute_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, position, quiet) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
       {
         UpdateDeviceStatus(response);
@@ -966,6 +970,7 @@ namespace iohome
       }
       else
       {
+        it->second.move_start_us = 0; // command failed, clear tracking
         IO_LOGE("SetDevicePosition: failed to send request!");
       }
       vTaskPrioritySet(NULL, currentPriority); // restore task priority
@@ -1666,6 +1671,8 @@ namespace iohome
       {
         deviceIt->second.is_stopped = (statusFrame.data[0] & CMD_PARAM_STATUS_STOPPED) ? true : false;
         deviceIt->second.last_status_timestamp = esp_timer_get_time();
+        if (deviceIt->second.is_stopped)
+          deviceIt->second.move_start_us = 0; // movement complete, stop interpolation
 
         // [0] status, [1] flags, [2-3] target position or marker (D2=stop, D4=do nothing),
         // [4-5] current position, [6-7] timer/unknown, [8-10] originator, [11] 01
@@ -1751,6 +1758,8 @@ namespace iohome
       {
         deviceIt->second.is_stopped = (statusFrame.data[0] & CMD_PARAM_STATUS_STOPPED) ? true : false;
         deviceIt->second.last_status_timestamp = esp_timer_get_time();
+        if (deviceIt->second.is_stopped)
+          deviceIt->second.move_start_us = 0; // movement complete, stop interpolation
         uint16_t tmpTargetPos = statusFrame.data[5] << 8 | statusFrame.data[6];
         uint16_t tmpCurrentPos = statusFrame.data[7] << 8 | statusFrame.data[8];
         if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)

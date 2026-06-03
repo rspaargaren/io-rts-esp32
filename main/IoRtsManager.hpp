@@ -61,6 +61,12 @@ namespace IoRts
         /// @brief Returns true if a remote capture window is currently open
         bool IsCaptureActive() const;
 
+        /// @brief Set transit time for a device (persists to NVS)
+        /// @param deviceID Device ID
+        /// @param transit_time_ms Transit time in milliseconds (0 = uncalibrated)
+        /// @return true on success
+        bool SetTransitTime(const std::string &deviceID, uint32_t transit_time_ms);
+
         /// @brief Start passive key sniffing — captures the IO system key from the next pairing handshake
         void StartKeySniff();
 

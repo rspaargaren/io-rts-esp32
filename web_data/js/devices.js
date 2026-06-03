@@ -188,13 +188,18 @@
 
             var hasPosition = (group === "shutter" || group === "venetian" || group === "window");
             var favPos = getFavPos(freshDevice.id);
+            var transitSecs = freshDevice.transit_time_ms ? Math.round(freshDevice.transit_time_ms / 1000) : 0;
+            var transitLabel = transitSecs > 0
+                ? "Transit time: " + transitSecs + " s"
+                : "Transit time: not calibrated";
             var infoLines = [
                 app.i18nText("popup.info_id", "ID: {value}").replace("{value}", freshDevice.id),
                 "Type: " + (freshDevice.type_name || "?"),
                 "Manufacturer: " + (freshDevice.manufacturer || "?"),
                 app.i18nText("popup.info_position", "Position: {value}%")
                     .replace("{value}", String(freshDevice.position >= 0 ? freshDevice.position : "unknown")),
-                "Low power: " + (freshDevice.is_low_power ? "yes" : "no")
+                "Low power: " + (freshDevice.is_low_power ? "yes" : "no"),
+                transitLabel
             ];
             if (hasPosition && favPos !== null) {
                 infoLines.push(
@@ -327,6 +332,43 @@
                             boolInput.checked = !boolInput.checked; // revert checkbox on failure
                         });
                 };
+            }
+
+            // Inject transit-time edit row into popup right panel
+            if (hasPosition) {
+                var rightPanel = document.getElementById("popup-content");
+                if (rightPanel) {
+                    var ttRow = document.createElement("div");
+                    ttRow.style.cssText = "margin-top:12px;font-size:.9em;";
+                    ttRow.innerHTML = transitSecs > 0
+                        ? "<strong>Transit time:</strong> " + transitSecs + " s"
+                        : "<strong>Transit time:</strong> <em>not calibrated</em>";
+
+                    var editLink = document.createElement("a");
+                    editLink.href = "#";
+                    editLink.textContent = " [Edit]";
+                    editLink.style.cssText = "margin-left:6px;font-size:.85em;";
+                    editLink.onclick = function (e) {
+                        e.preventDefault();
+                        var newVal = prompt("Transit time in seconds (full range travel time):", transitSecs || "");
+                        if (newVal === null) return;
+                        var secs = parseInt(newVal);
+                        if (isNaN(secs) || secs < 0) { showToast("Enter a positive number of seconds.", "error"); return; }
+                        window.MiOpenApi.postJson("/api/action", {
+                            action: "setTransitTime", id: freshDevice.id, value: secs
+                        }).then(function () {
+                            transitSecs = secs;
+                            freshDevice.transit_time_ms = secs * 1000;
+                            ttRow.innerHTML = secs > 0
+                                ? "<strong>Transit time:</strong> " + secs + " s"
+                                : "<strong>Transit time:</strong> <em>not calibrated</em>";
+                            ttRow.appendChild(editLink);
+                            showToast("Transit time saved.", "success");
+                        }).catch(function (e) { showToast("Error: " + e.message, "error"); });
+                    };
+                    ttRow.appendChild(editLink);
+                    rightPanel.appendChild(ttRow);
+                }
             }
         })();
     }
