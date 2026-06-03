@@ -279,6 +279,13 @@
         document.getElementById("io-key-edit-close").addEventListener("click", closeIoKeyEditModal);
         document.getElementById("io-key-edit-cancel").addEventListener("click", closeIoKeyEditModal);
         document.getElementById("io-key-edit-save").addEventListener("click", function () { saveIoKey(app); });
+        document.getElementById("io-key-generate").addEventListener("click", function () {
+            const bytes = new Uint8Array(16);
+            crypto.getRandomValues(bytes);
+            const hex = Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, "0").toUpperCase(); }).join("");
+            document.getElementById("io-key-new-input").value = hex;
+            document.getElementById("io-key-edit-status").textContent = "";
+        });
 
         document.getElementById("io-sniff-close").addEventListener("click", async function () {
             await cancelSniff();
