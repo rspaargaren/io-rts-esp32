@@ -659,12 +659,30 @@ namespace iohome
             std::map<std::string, std::list<std::string>>::iterator it = sRemoteMap.find(srcDevice);
             if (it != sRemoteMap.end())
             {
+              // Decode target position from 1W execute frame (data[2] = 2*position, 0-200)
+              float remoteTarget = -1.0f;
+              if (item.frame.command_id == CMD_EXECUTE_REQUEST && item.frame.data_len >= 3
+                  && item.frame.data[2] <= 200)
+              {
+                remoteTarget = item.frame.data[2] / 2.0f; // 0–200 → 0.0–100.0
+              }
               for (std::string deviceID : it->second)
               {
                 std::map<std::string, IoDevice>::iterator device = sDeviceMap.find(deviceID);
                 if (device != sDeviceMap.end())
                 {
                   device->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_AFTER_REMOTE_US;
+                  // Start interpolation if we know the target (not STOP/FAVORITE/UNKNOWN)
+                  if (remoteTarget >= 0.0f)
+                  {
+                    device->second.move_start_us   = esp_timer_get_time();
+                    device->second.move_start_pos  = device->second.position;
+                    device->second.move_target_pos = remoteTarget;
+                  }
+                  else
+                  {
+                    device->second.move_start_us = 0; // STOP or special command, no interpolation
+                  }
                 }
               }
             }

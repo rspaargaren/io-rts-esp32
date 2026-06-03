@@ -35,12 +35,14 @@
         app.logStatus(result.message || ("Action " + action + " sent."), "debug");
     }
 
-    function updateDeviceFill(deviceId, percent) {
+    function updateDeviceFill(deviceId, percent, estimated) {
         const deviceEl = document.querySelector('.device[data-id="' + deviceId + '"]');
         if (!deviceEl) return;
         const fill = 100 - percent;
         deviceEl.style.background = "linear-gradient(to top, var(--color-input) " +
             fill + "%, var(--color-accent3) " + fill + "%)";
+        // Dashed border signals estimated/predicted position
+        deviceEl.style.outline = estimated ? "2px dashed var(--color-accent2, #aaa)" : "";
         var slider = deviceEl.querySelector('input[data-slider="position"]');
         if (slider) slider.value = percent;
     }

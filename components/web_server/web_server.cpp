@@ -224,13 +224,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-void web_server_broadcast_position(const char *device_id, int position, bool is_stopped)
+void web_server_broadcast_position(const char *device_id, int position, bool is_stopped, bool estimated)
 {
     if (!s_server) return;
-    char buf[128];
+    char buf[160];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"position\",\"id\":\"%s\",\"position\":%d,\"stopped\":%s}",
-        device_id, position, is_stopped ? "true" : "false");
+        "{\"type\":\"position\",\"id\":\"%s\",\"position\":%d,\"stopped\":%s,\"estimated\":%s}",
+        device_id, position, is_stopped ? "true" : "false", estimated ? "true" : "false");
     for (int i = 0; i < WS_MAX_CLIENTS; i++)
         if (s_ws_fds[i] != -1) ws_send_str(s_ws_fds[i], buf);
 }

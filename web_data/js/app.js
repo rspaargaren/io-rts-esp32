@@ -199,7 +199,7 @@
                 if (data.type === "log") {
                     app.logStatus(data.message, data.level || "debug");
                 } else if (data.type === "position") {
-                    app.updateDeviceFill(data.id, data.position);
+                    app.updateDeviceFill(data.id, data.position, data.estimated);
                 } else if (data.type === "init") {
                     app.fetchAndDisplayDevices();
                 } else if (data.type === "device_deactivated" || data.type === "device_reactivated") {

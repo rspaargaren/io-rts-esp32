@@ -6,6 +6,7 @@
 #include "web_server.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "ioRtsMan";
@@ -145,7 +146,7 @@ namespace IoRts
             sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
 #if CONFIG_WEB_ENABLED
             if (device.position != iohome::UNKNOWN_POSITION)
-                web_server_broadcast_position(deviceID.c_str(), (int)device.position, device.is_stopped);
+                web_server_broadcast_position(deviceID.c_str(), (int)device.position, device.is_stopped, false);
 #endif
             // send MQTT messages
             if (sMqttHelper != nullptr)
@@ -157,6 +158,32 @@ namespace IoRts
                 sMqttHelper->SendIoDeviceStatus(deviceID);
             }
         }
+    }
+
+    // ── Interpolation timer ─────────────────────────────────────────────────
+
+    static void interpolation_timer_cb(void *arg)
+    {
+        if (!sIoRtsManager) return;
+        int64_t now = esp_timer_get_time();
+
+        sIoRtsManager->mIoDevicesMutex.lock();
+        for (auto &[id, dev] : sIoRtsManager->mIoDevices)
+        {
+            if (dev.move_start_us == 0 || dev.transit_time_ms == 0)
+                continue;
+            int64_t elapsed_ms = (now - dev.move_start_us) / 1000;
+            float fraction = (float)elapsed_ms / (float)dev.transit_time_ms;
+            if (fraction > 1.0f) fraction = 1.0f;
+            float estimated = dev.move_start_pos + (dev.move_target_pos - dev.move_start_pos) * fraction;
+#if CONFIG_WEB_ENABLED
+            web_server_broadcast_position(id.c_str(), (int)estimated, false, true);
+#endif
+            // Stop broadcasting once clamped (device should report back soon)
+            if (fraction >= 1.0f)
+                dev.move_start_us = 0;
+        }
+        sIoRtsManager->mIoDevicesMutex.unlock();
     }
 
     IoRtsManager::IoRtsManager()
@@ -177,6 +204,13 @@ namespace IoRts
         {
             sMqttHelper->StartMqttClient();
         }
+        // Start interpolation timer (fires every 1 s)
+        esp_timer_create_args_t ta = {};
+        ta.callback = interpolation_timer_cb;
+        ta.name = "interp";
+        esp_timer_handle_t th;
+        if (esp_timer_create(&ta, &th) == ESP_OK)
+            esp_timer_start_periodic(th, 1000000); // 1 s
     }
     void IoRtsManager::Reboot()
     {
