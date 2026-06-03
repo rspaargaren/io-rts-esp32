@@ -32,6 +32,14 @@ namespace IoRts
 #endif
     }
 
+    static void keySniffCallback(const std::string &hexKey)
+    {
+        ESP_LOGI(TAG, "Key sniff: captured key %s", hexKey.c_str());
+#if CONFIG_WEB_ENABLED
+        web_server_broadcast_message(std::format("{{\"type\":\"io_key_captured\",\"key\":\"{}\"}}", hexKey).c_str());
+#endif
+    }
+
     static void loggerCallback(esp_log_level_t log_level, const char *tag, std::string log)
     {
         char level;
@@ -376,6 +384,29 @@ namespace IoRts
         return sCaptureActive;
     }
 
+    void IoRtsManager::StartKeySniff()
+    {
+        if (mIoHome != nullptr)
+            mIoHome->StartKeySniff();
+    }
+
+    void IoRtsManager::StopKeySniff()
+    {
+        if (mIoHome != nullptr)
+            mIoHome->StopKeySniff();
+    }
+
+    bool IoRtsManager::IsKeySniffActive() const
+    {
+        return mIoHome != nullptr && mIoHome->IsKeySniffActive();
+    }
+
+    std::string IoRtsManager::GetSniffedKey() const
+    {
+        if (mIoHome == nullptr) return {};
+        return mIoHome->GetSniffedKey();
+    }
+
     void IoRtsManager::InitializeIo()
     {
         // Initialize IO-HOMECONTROL
@@ -392,6 +423,7 @@ namespace IoRts
                 mIoHome->Begin(IoHomeConfig::GetIoNodeId(), IoHomeConfig::GetIoSystemKey(), IoHomeConfig::isPassiveModeEnabled());
                 mIoHome->ConfigureRadio(IoHomeConfig::GetTxPower());
                 mIoHome->SetUnknownSenderCallback(unknownSenderCallback);
+                mIoHome->SetKeySniffCallback(keySniffCallback);
             }
         }
     }

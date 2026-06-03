@@ -61,6 +61,18 @@ namespace IoRts
         /// @brief Returns true if a remote capture window is currently open
         bool IsCaptureActive() const;
 
+        /// @brief Start passive key sniffing — captures the IO system key from the next pairing handshake
+        void StartKeySniff();
+
+        /// @brief Stop passive key sniffing
+        void StopKeySniff();
+
+        /// @brief Returns true if key sniffing is currently active
+        bool IsKeySniffActive() const;
+
+        /// @brief Returns the last captured key as a 32-char hex string, or empty if none yet
+        std::string GetSniffedKey() const;
+
         /// @brief Retrieve current configuration about passive / active mode
         /// @return true if currently in passive mode
         bool isIoPassive() { return mIoPassive; }

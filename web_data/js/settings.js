@@ -138,6 +138,163 @@
         }
     }
 
+    // ── IO System Key ─────────────────────────────────────────────────────────
+
+    let sniffPollTimer = null;
+    let sniffCountdownTimer = null;
+    let sniffSecondsLeft = 0;
+
+    async function loadIoKey(app) {
+        try {
+            const r = await window.MiOpenApi.requestJson("/api/io/key");
+            if (r && r.key) app.elements.ioKeyDisplay.value = r.key;
+        } catch (e) { /* silently ignore — key may not be set */ }
+    }
+
+    function openIoKeyEditModal(app, prefill) {
+        const modal = document.getElementById("io-key-edit-modal");
+        const input = document.getElementById("io-key-new-input");
+        const status = document.getElementById("io-key-edit-status");
+        input.value = prefill || "";
+        status.textContent = "";
+        modal.style.display = "flex";
+        input.focus();
+    }
+
+    function closeIoKeyEditModal() {
+        document.getElementById("io-key-edit-modal").style.display = "none";
+    }
+
+    async function saveIoKey(app) {
+        const input = document.getElementById("io-key-new-input");
+        const status = document.getElementById("io-key-edit-status");
+        const key = input.value.trim().toUpperCase();
+        if (!/^[0-9A-F]{32}$/.test(key)) {
+            status.textContent = "Key must be exactly 32 hex characters (0-9, A-F).";
+            status.style.color = "#e74c3c";
+            return;
+        }
+        try {
+            await window.MiOpenApi.postJson("/api/io/key", { key: key });
+            app.elements.ioKeyDisplay.value = key;
+            app.elements.ioKeyStatus.textContent = "Key saved. Reboot to apply.";
+            app.elements.ioKeyStatus.style.color = "#27ae60";
+            closeIoKeyEditModal();
+        } catch (e) {
+            status.textContent = "Error saving key: " + (e.message || e);
+            status.style.color = "#e74c3c";
+        }
+    }
+
+    function stopSniffPoll() {
+        if (sniffPollTimer) { clearInterval(sniffPollTimer); sniffPollTimer = null; }
+        if (sniffCountdownTimer) { clearInterval(sniffCountdownTimer); sniffCountdownTimer = null; }
+    }
+
+    async function cancelSniff() {
+        stopSniffPoll();
+        try { await window.MiOpenApi.postJson("/api/io/sniff", { active: false }); } catch (e) { /* ignore */ }
+    }
+
+    function openSniffModal() {
+        const modal = document.getElementById("io-key-sniff-modal");
+        document.getElementById("io-sniff-instructions").style.display = "";
+        document.getElementById("io-sniff-countdown-row").style.display = "none";
+        document.getElementById("io-sniff-result-row").style.display = "none";
+        document.getElementById("io-sniff-status").textContent = "";
+        document.getElementById("io-sniff-start").style.display = "";
+        document.getElementById("io-sniff-use-key").style.display = "none";
+        document.getElementById("io-sniff-retry").style.display = "none";
+        modal.style.display = "flex";
+    }
+
+    async function startSniff(app) {
+        document.getElementById("io-sniff-start").style.display = "none";
+        document.getElementById("io-sniff-retry").style.display = "none";
+        document.getElementById("io-sniff-result-row").style.display = "none";
+        document.getElementById("io-sniff-status").textContent = "";
+        document.getElementById("io-sniff-instructions").style.display = "none";
+        document.getElementById("io-sniff-countdown-row").style.display = "";
+
+        sniffSecondsLeft = 120;
+        document.getElementById("io-sniff-countdown").textContent = sniffSecondsLeft;
+
+        try { await window.MiOpenApi.postJson("/api/io/sniff", { active: true }); } catch (e) {
+            document.getElementById("io-sniff-status").textContent = "Failed to start: " + (e.message || e);
+            document.getElementById("io-sniff-start").style.display = "";
+            return;
+        }
+
+        sniffCountdownTimer = setInterval(function () {
+            sniffSecondsLeft--;
+            document.getElementById("io-sniff-countdown").textContent = sniffSecondsLeft;
+            if (sniffSecondsLeft <= 0) {
+                stopSniffPoll();
+                document.getElementById("io-sniff-countdown-row").style.display = "none";
+                document.getElementById("io-sniff-status").textContent = "No key captured. Try again.";
+                document.getElementById("io-sniff-retry").style.display = "";
+            }
+        }, 1000);
+
+        sniffPollTimer = setInterval(async function () {
+            try {
+                const r = await window.MiOpenApi.requestJson("/api/io/sniff");
+                if (r && r.key) {
+                    stopSniffPoll();
+                    document.getElementById("io-sniff-countdown-row").style.display = "none";
+                    document.getElementById("io-sniff-captured-key").textContent = r.key;
+                    document.getElementById("io-sniff-result-row").style.display = "";
+                    document.getElementById("io-sniff-use-key").dataset.key = r.key;
+                    document.getElementById("io-sniff-use-key").style.display = "";
+                }
+            } catch (e) { /* ignore poll errors */ }
+        }, 2000);
+    }
+
+    function useSniffedKey(app) {
+        const key = document.getElementById("io-sniff-use-key").dataset.key;
+        document.getElementById("io-key-sniff-modal").style.display = "none";
+        stopSniffPoll();
+        openIoKeyEditModal(app, key);
+    }
+
+    function initIoKey(app) {
+        app.elements.ioKeyDisplay = document.getElementById("io-key-display");
+        app.elements.ioKeyStatus  = document.getElementById("io-key-status");
+
+        document.getElementById("io-key-show").addEventListener("click", function () {
+            const el = app.elements.ioKeyDisplay;
+            el.type = el.type === "password" ? "text" : "password";
+            this.textContent = el.type === "password" ? "Show" : "Hide";
+        });
+
+        document.getElementById("io-key-edit").addEventListener("click", function () {
+            openIoKeyEditModal(app, app.elements.ioKeyDisplay.value);
+        });
+
+        document.getElementById("io-key-sniff").addEventListener("click", function () {
+            openSniffModal();
+        });
+
+        document.getElementById("io-key-edit-close").addEventListener("click", closeIoKeyEditModal);
+        document.getElementById("io-key-edit-cancel").addEventListener("click", closeIoKeyEditModal);
+        document.getElementById("io-key-edit-save").addEventListener("click", function () { saveIoKey(app); });
+
+        document.getElementById("io-sniff-close").addEventListener("click", async function () {
+            await cancelSniff();
+            document.getElementById("io-key-sniff-modal").style.display = "none";
+        });
+        document.getElementById("io-sniff-cancel").addEventListener("click", async function () {
+            await cancelSniff();
+            document.getElementById("io-key-sniff-modal").style.display = "none";
+        });
+        document.getElementById("io-sniff-start").addEventListener("click", function () { startSniff(app); });
+        document.getElementById("io-sniff-retry").addEventListener("click", function () { startSniff(app); });
+        document.getElementById("io-sniff-use-key").addEventListener("click", function () { useSniffedKey(app); });
+
+        loadIoKey(app);
+    }
+
     function init(app) {
         // Fallback AP elements
         app.elements.fallbackEnabled        = document.getElementById("fallback-enabled");
@@ -168,6 +325,8 @@
         });
         loadWifiConfig(app);
 
+        initIoKey(app);
+
         app.loadMqttConfig = function () { return loadMqttConfig(app); };
         app.updateMqttConfig = function () { return updateMqttConfig(app); };
         app.uploadDevices = function () {
@@ -189,5 +348,15 @@
         };
     }
 
-    window.MiOpenSettings = { init: init };
+    function onKeyCaptured(key) {
+        if (!key) return;
+        stopSniffPoll();
+        document.getElementById("io-sniff-countdown-row").style.display = "none";
+        document.getElementById("io-sniff-captured-key").textContent = key;
+        document.getElementById("io-sniff-result-row").style.display = "";
+        document.getElementById("io-sniff-use-key").dataset.key = key;
+        document.getElementById("io-sniff-use-key").style.display = "";
+    }
+
+    window.MiOpenSettings = { init: init, onKeyCaptured: onKeyCaptured };
 })();

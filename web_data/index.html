@@ -191,6 +191,22 @@
                     </div>
                 </section>
 
+                <section id="io-key-section">
+                    <div class="title">
+                        <h2>IO System Key</h2>
+                    </div>
+                    <div class="card">
+                        <p style="font-size:0.9em;opacity:0.8;margin:0 0 8px 0;">The 16-byte AES key shared by all controllers on this installation.</p>
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <input type="password" id="io-key-display" placeholder="(not set)" readonly style="flex:1;margin:0;font-family:monospace;">
+                            <button id="io-key-show" style="white-space:nowrap;">Show</button>
+                            <button id="io-key-edit" style="white-space:nowrap;">Edit</button>
+                            <button id="io-key-sniff" style="white-space:nowrap;">Sniff</button>
+                        </div>
+                        <span id="io-key-status" style="margin-top:6px;font-size:0.9em;"></span>
+                    </div>
+                </section>
+
                 <section id="ota-section">
                     <div class="title">
                         <h2>Firmware Update</h2>
@@ -266,6 +282,52 @@
                 </div>
                 <div id="right">
                     <p id="popup-content"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- IO System Key — Edit modal -->
+    <div id="io-key-edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;">
+        <div class="popup-container" style="max-width:480px;width:90%;">
+            <div class="title">
+                <h2>Edit IO System Key</h2>
+                <div class="btn close" id="io-key-edit-close"></div>
+            </div>
+            <div class="card-popup" style="display:block;">
+                <label for="io-key-new-input">New key (32 hex characters):</label>
+                <input type="text" id="io-key-new-input" maxlength="32" placeholder="e.g. E8CD451E4F5D86C9A411E84B769FBFBD" style="font-family:monospace;text-transform:uppercase;" autocomplete="off">
+                <span id="io-key-edit-status" style="font-size:0.9em;"></span>
+                <div class="popup-buttons" style="margin-top:12px;">
+                    <button id="io-key-edit-save" class="save">Change Key</button>
+                    <button id="io-key-edit-cancel" type="button">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- IO System Key — Sniff modal -->
+    <div id="io-key-sniff-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;">
+        <div class="popup-container" style="max-width:480px;width:90%;">
+            <div class="title">
+                <h2>Sniff IO System Key</h2>
+                <div class="btn close" id="io-sniff-close"></div>
+            </div>
+            <div class="card-popup" style="display:block;">
+                <p id="io-sniff-instructions">Put your Somfy controller (Tahoma, remote, etc.) into pairing mode with any device on your installation. The system key will be captured from the radio traffic. This may take up to 2 minutes.</p>
+                <div id="io-sniff-countdown-row" style="display:none;margin:8px 0;">
+                    <span>Listening… </span><span id="io-sniff-countdown" style="font-weight:bold;"></span><span> s remaining</span>
+                </div>
+                <div id="io-sniff-result-row" style="display:none;margin:8px 0;">
+                    <span style="color:#27ae60;font-weight:bold;">✓ Key captured:</span>
+                    <div style="font-family:monospace;word-break:break-all;margin:4px 0;" id="io-sniff-captured-key"></div>
+                </div>
+                <span id="io-sniff-status" style="font-size:0.9em;"></span>
+                <div class="popup-buttons" style="margin-top:12px;">
+                    <button id="io-sniff-start" class="save">Start Listening</button>
+                    <button id="io-sniff-use-key" class="save" style="display:none;">Use This Key</button>
+                    <button id="io-sniff-retry" style="display:none;">Retry</button>
+                    <button id="io-sniff-cancel" type="button">Cancel</button>
                 </div>
             </div>
         </div>

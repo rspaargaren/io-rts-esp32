@@ -25,6 +25,7 @@ namespace iohome
   typedef void (*LoggerCallback)(esp_log_level_t log_level, const char *tag, std::string log); // Callback to receive logs from the IO controller (if verbose)
   typedef void (*UpdatedDeviceCallback)(const std::string deviceID, const IoDevice &device);   // Callback to receive status update of devices
   typedef void (*UnknownSenderCallback)(const std::string &senderID);                          // Callback when a frame from an unregistered sender is received
+  typedef void (*KeySniffCallback)(const std::string &hexKey);                                 // Callback when a key is captured during passive sniffing
 
   /**
    * @brief io-homecontrol Node Controller
@@ -82,6 +83,23 @@ namespace iohome
     /// @brief Register callback for frames from unregistered senders (useful for remote capture)
     /// @param cb Callback function, or nullptr to unregister
     void SetUnknownSenderCallback(UnknownSenderCallback cb);
+
+    /// @brief Register callback invoked when a key is captured during passive sniffing
+    /// @param cb Callback function, or nullptr to unregister
+    void SetKeySniffCallback(KeySniffCallback cb);
+
+    /// @brief Start passive key sniffing — next CMD_KEY_TRANSFER seen triggers the callback
+    /// Auto-stops after 120 seconds if no key is found.
+    void StartKeySniff();
+
+    /// @brief Stop passive key sniffing
+    void StopKeySniff();
+
+    /// @brief Returns true if key sniffing is currently active
+    bool IsKeySniffActive() const;
+
+    /// @brief Returns the last captured key as a 32-char hex string, or empty if none captured yet
+    std::string GetSniffedKey() const;
 
     /// @brief Get ignore auto-update flag
     /// @return true if auto-update flag is ignored

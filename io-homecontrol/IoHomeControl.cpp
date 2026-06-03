@@ -80,6 +80,12 @@ namespace iohome
   static LoggerCallback sLoggerCallback;                           // Callback to send logs to
   static UpdatedDeviceCallback sDeviceStatusCallback;              // Callback to send device status updates to
   static UnknownSenderCallback sUnknownSenderCallback = nullptr;   // Callback for frames from unregistered senders
+  static KeySniffCallback sKeySniffCallback = nullptr;             // Callback invoked when a key is captured during sniffing
+  static volatile bool sSniffKeyActive = false;                    // true while passive key sniffing is active
+  static char sSniffedKey[33] = {};                                // last captured key as 32-char hex + null
+  static int64_t sSniffStartUs = 0;                                // timestamp when sniffing started
+
+  constexpr int64_t KEY_SNIFF_TIMEOUT_US = 120LL * 1000000LL;     // 120 s auto-stop
 
   struct RadioRxFrameQueueItem
   {
@@ -553,6 +559,12 @@ namespace iohome
     {
       if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
       {
+        // Auto-stop key sniffing after timeout
+        if (sSniffKeyActive && (esp_timer_get_time() - sSniffStartUs) > KEY_SNIFF_TIMEOUT_US)
+        {
+          sSniffKeyActive = false;
+          IO_LOGI("Key sniffing timed out after 120 s");
+        }
         RxFrameQueueItem item;
         while (xQueueReceive(sRxIoQueue, &item, RECEIVED_IO_TREATMENT_WAIT_TICKS))
         {
@@ -588,8 +600,16 @@ namespace iohome
                   && keyTransferItem.frame.data_len == AES_KEY_SIZE                                                                                // Does it contain correct data length?
                   && iohome::crypto::crypt_2w_key(&item.frame.command_id, 1, challengeItem.frame.data, keyTransferItem.frame.data, decrypted_key)) // decrypt...
               {
-                // So let's print!
-                IO_LOGI("Extracted a key to control device {}: {}", buffToHexString(NODE_ID_SIZE, keyTransferItem.frame.dest_node), buffToHexString(AES_KEY_SIZE, decrypted_key));
+                std::string hexKey = buffToHexString(AES_KEY_SIZE, decrypted_key);
+                IO_LOGI("Extracted a key to control device {}: {}", buffToHexString(NODE_ID_SIZE, keyTransferItem.frame.dest_node), hexKey);
+                if (sSniffKeyActive)
+                {
+                  strncpy(sSniffedKey, hexKey.c_str(), 32);
+                  sSniffedKey[32] = '\0';
+                  sSniffKeyActive = false;
+                  if (sKeySniffCallback)
+                    sKeySniffCallback(hexKey);
+                }
               }
               else
               {
@@ -1913,6 +1933,35 @@ namespace iohome
     }
     IO_LOGE("DeviceGetBattery: failed to take mutex!");
     return false;
+  }
+
+  void IoHomeControl::SetKeySniffCallback(KeySniffCallback cb)
+  {
+    sKeySniffCallback = cb;
+  }
+
+  void IoHomeControl::StartKeySniff()
+  {
+    memset(sSniffedKey, 0, sizeof(sSniffedKey));
+    sSniffStartUs = esp_timer_get_time();
+    sSniffKeyActive = true;
+    IO_LOGI("Key sniffing started (120 s window)");
+  }
+
+  void IoHomeControl::StopKeySniff()
+  {
+    sSniffKeyActive = false;
+    IO_LOGI("Key sniffing stopped");
+  }
+
+  bool IoHomeControl::IsKeySniffActive() const
+  {
+    return sSniffKeyActive;
+  }
+
+  std::string IoHomeControl::GetSniffedKey() const
+  {
+    return std::string(sSniffedKey);
   }
 
 } // namespace iohome
