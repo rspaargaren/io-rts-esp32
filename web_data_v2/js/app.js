@@ -320,7 +320,8 @@
         app.logStatus("Loading devices…", "debug");
         app.loadMqttConfig();
         app.loadSyslogConfig();
-        app.fetchAndDisplayDevices();
-        app.fetchAndDisplayRemotes();
+        app.fetchAndDisplayDevices().then(function () {
+            app.fetchAndDisplayRemotes();
+        });
     });
 })();

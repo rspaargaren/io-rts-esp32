@@ -24,7 +24,7 @@
             if (!remotes.length) {
                 var row = document.createElement("tr");
                 var cell = document.createElement("td");
-                cell.colSpan = 4;
+                cell.colSpan = 3;
                 cell.textContent = "No remotes yet.";
                 row.appendChild(cell);
                 tbody.appendChild(row);
@@ -41,7 +41,6 @@
                 idCell.appendChild(tag);
 
                 var devCell = document.createElement("td");
-                devCell.colSpan = 2;
                 devCell.textContent = findLinkedDeviceNames(remote);
 
                 var actCell = document.createElement("td");
