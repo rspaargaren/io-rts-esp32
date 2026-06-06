@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <algorithm>
+#include <cmath>
 #include "esp_log.h"
 #include <ios>
 #include <sstream>
@@ -81,6 +82,7 @@ namespace iohome
   static UpdatedDeviceCallback sDeviceStatusCallback;              // Callback to send device status updates to
   static UnknownSenderCallback sUnknownSenderCallback = nullptr;   // Callback for frames from unregistered senders
   static KeySniffCallback sKeySniffCallback = nullptr;             // Callback invoked when a key is captured during sniffing
+  static MovementStartedCallback sMovementStartedCallback = nullptr; // Callback invoked when movement tracking starts
   static volatile bool sSniffKeyActive = false;                    // true while passive key sniffing is active
   static char sSniffedKey[33] = {};                                // last captured key as 32-char hex + null
   static int64_t sSniffStartUs = 0;                                // timestamp when sniffing started
@@ -659,12 +661,35 @@ namespace iohome
             std::map<std::string, std::list<std::string>>::iterator it = sRemoteMap.find(srcDevice);
             if (it != sRemoteMap.end())
             {
+              // Decode target position from 1W execute frame (data[2] = 2*position, 0-200)
+              float remoteTarget = -1.0f;
+              if (item.frame.command_id == CMD_EXECUTE_REQUEST && item.frame.data_len >= 3
+                  && item.frame.data[2] <= 200)
+              {
+                remoteTarget = item.frame.data[2] / 2.0f; // 0–200 → 0.0–100.0
+              }
               for (std::string deviceID : it->second)
               {
                 std::map<std::string, IoDevice>::iterator device = sDeviceMap.find(deviceID);
                 if (device != sDeviceMap.end())
                 {
                   device->second.next_status_update_timestamp = esp_timer_get_time() + STATUS_UPDATE_AFTER_REMOTE_US;
+                  // Start interpolation if we know the target (not STOP/FAVORITE/UNKNOWN)
+                  if (remoteTarget >= 0.0f)
+                  {
+                    device->second.move_start_us   = esp_timer_get_time();
+                    device->second.move_start_pos  = device->second.position;
+                    device->second.move_target_pos = remoteTarget;
+                    if (sMovementStartedCallback)
+                    {
+                      float dist = std::abs(remoteTarget - device->second.position) / 100.0f;
+                      sMovementStartedCallback(deviceID, device->second.transit_time_ms, dist);
+                    }
+                  }
+                  else
+                  {
+                    device->second.move_start_us = 0; // STOP or special command, no interpolation
+                  }
                 }
               }
             }
@@ -959,6 +984,10 @@ namespace iohome
       bool ret = false;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
+      // Record movement tracking before sending so elapsed time is accurate
+      it->second.move_start_us   = esp_timer_get_time();
+      it->second.move_start_pos  = it->second.position;
+      it->second.move_target_pos = (float)position;
       if (create_execute_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, position, quiet) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
       {
         UpdateDeviceStatus(response);
@@ -966,6 +995,7 @@ namespace iohome
       }
       else
       {
+        it->second.move_start_us = 0; // command failed, clear tracking
         IO_LOGE("SetDevicePosition: failed to send request!");
       }
       vTaskPrioritySet(NULL, currentPriority); // restore task priority
@@ -1666,6 +1696,8 @@ namespace iohome
       {
         deviceIt->second.is_stopped = (statusFrame.data[0] & CMD_PARAM_STATUS_STOPPED) ? true : false;
         deviceIt->second.last_status_timestamp = esp_timer_get_time();
+        if (deviceIt->second.is_stopped)
+          deviceIt->second.move_start_us = 0; // movement complete, stop interpolation
 
         // [0] status, [1] flags, [2-3] target position or marker (D2=stop, D4=do nothing),
         // [4-5] current position, [6-7] timer/unknown, [8-10] originator, [11] 01
@@ -1751,6 +1783,8 @@ namespace iohome
       {
         deviceIt->second.is_stopped = (statusFrame.data[0] & CMD_PARAM_STATUS_STOPPED) ? true : false;
         deviceIt->second.last_status_timestamp = esp_timer_get_time();
+        if (deviceIt->second.is_stopped)
+          deviceIt->second.move_start_us = 0; // movement complete, stop interpolation
         uint16_t tmpTargetPos = statusFrame.data[5] << 8 | statusFrame.data[6];
         uint16_t tmpCurrentPos = statusFrame.data[7] << 8 | statusFrame.data[8];
         if (tmpTargetPos <= CMD_PARAM_STATUS_POS_MAX)
@@ -1938,6 +1972,11 @@ namespace iohome
   void IoHomeControl::SetKeySniffCallback(KeySniffCallback cb)
   {
     sKeySniffCallback = cb;
+  }
+
+  void IoHomeControl::SetMovementStartedCallback(MovementStartedCallback cb)
+  {
+    sMovementStartedCallback = cb;
   }
 
   void IoHomeControl::StartKeySniff()

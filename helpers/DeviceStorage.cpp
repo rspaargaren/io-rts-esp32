@@ -87,6 +87,9 @@ namespace Helpers
         cJSON_AddBoolToObject(root, "open_close_inverted", dev.info.is_openclose_inverted);
         cJSON_AddBoolToObject(root, "is_low_power", dev.info.is_low_power);
 
+        // Transit time
+        cJSON_AddNumberToObject(root, "transit_ms", storedDevice.transit_time_ms);
+
         // Linked remotes
         cJSON *remotes = cJSON_AddArrayToObject(root, "remotes");
         if (remotes != nullptr)
@@ -216,6 +219,10 @@ namespace Helpers
 
         cJSON *isLowPowerItem = cJSON_GetObjectItem(root, "is_low_power");
         dev.info.is_low_power = cJSON_IsBool(isLowPowerItem) ? cJSON_IsTrue(isLowPowerItem) : true;
+
+        // Parse transit time
+        cJSON *transitItem = cJSON_GetObjectItem(root, "transit_ms");
+        storedDevice.transit_time_ms = cJSON_IsNumber(transitItem) ? (uint32_t)transitItem->valuedouble : 0;
 
         // Initialize runtime fields
         dev.is_stopped = true;

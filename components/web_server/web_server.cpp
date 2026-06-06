@@ -18,6 +18,7 @@
 #include <arpa/inet.h>
 #include <format>
 #include <list>
+#include <cmath>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -224,13 +225,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-void web_server_broadcast_position(const char *device_id, int position, bool is_stopped)
+void web_server_broadcast_position(const char *device_id, int position, bool is_stopped, bool estimated)
 {
     if (!s_server) return;
-    char buf[128];
+    char buf[160];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"position\",\"id\":\"%s\",\"position\":%d,\"stopped\":%s}",
-        device_id, position, is_stopped ? "true" : "false");
+        "{\"type\":\"position\",\"id\":\"%s\",\"position\":%d,\"stopped\":%s,\"estimated\":%s}",
+        device_id, position, is_stopped ? "true" : "false", estimated ? "true" : "false");
     for (int i = 0; i < WS_MAX_CLIENTS; i++)
         if (s_ws_fds[i] != -1) ws_send_str(s_ws_fds[i], buf);
 }
@@ -398,6 +399,9 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddBoolToObject(obj, "is_inverted",   dev.info.is_openclose_inverted);
         cJSON_AddBoolToObject(obj, "tilt_supported",
             iohome::deviceTypeSupportsTilt(dev.info.device_type));
+
+        cJSON_AddNumberToObject(obj, "transit_time_ms", dev.transit_time_ms);
+
         cJSON_AddItemToArray(arr, obj);
     }
     s_manager->mIoDevicesMutex.unlock();
@@ -433,6 +437,12 @@ static esp_err_t api_remotes_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── Calibration wizard (declarations, implementation further below) ─────────
+static volatile bool s_cal_cancel = false;
+static char s_cal_device_id[8] = {};
+struct CalibrationArg { char deviceID[8]; };
+static void calibration_task(void *arg); // forward declaration
+
 // ─── POST /api/action ───────────────────────────────────────────────────────
 
 static esp_err_t api_action_post(httpd_req_t *req)
@@ -460,12 +470,37 @@ static esp_err_t api_action_post(httpd_req_t *req)
 
     if (strcmp(action, "open") == 0) {
         ok = s_manager->mIoHome->OpenDevice(deviceId);
+        if (ok) {
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceId);
+            float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
+            uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
+            s_manager->mIoDevicesMutex.unlock();
+            s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
+        }
     } else if (strcmp(action, "close") == 0) {
         ok = s_manager->mIoHome->CloseDevice(deviceId);
+        if (ok) {
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceId);
+            float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
+            uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
+            s_manager->mIoDevicesMutex.unlock();
+            s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
+        }
     } else if (strcmp(action, "stop") == 0) {
         ok = s_manager->mIoHome->StopDevice(deviceId);
+        if (ok) s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f); // poll soon after stop
     } else if (strcmp(action, "position") == 0 && value >= 0 && value <= 100) {
         ok = s_manager->mIoHome->SetDevicePosition(deviceId, (uint8_t)value);
+        if (ok) {
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceId);
+            float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
+            uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
+            s_manager->mIoDevicesMutex.unlock();
+            s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
+        }
     } else if (strcmp(action, "tilt") == 0 && value >= 0 && value <= 100) {
         ok = s_manager->mIoHome->SetDeviceTilt(deviceId, (uint8_t)value);
     } else if (strcmp(action, "identify") == 0) {
@@ -508,6 +543,22 @@ static esp_err_t api_action_post(httpd_req_t *req)
                 return ESP_OK;
             }
         }
+    } else if (strcmp(action, "setTransitTime") == 0) {
+        if (strlen(deviceId) > 0 && value >= 0) {
+            ok = s_manager->SetTransitTime(deviceId, (uint32_t)(value * 1000));
+        }
+    } else if (strcmp(action, "calibrate") == 0) {
+        if (strlen(deviceId) > 0 && s_cal_device_id[0] == '\0') {
+            auto *arg = new CalibrationArg();
+            strncpy(arg->deviceID, deviceId, sizeof(arg->deviceID) - 1);
+            arg->deviceID[sizeof(arg->deviceID) - 1] = '\0';
+            strncpy(s_cal_device_id, deviceId, sizeof(s_cal_device_id) - 1);
+            xTaskCreate(calibration_task, "calibration", 4096, arg, 5, nullptr);
+            ok = true;
+        }
+    } else if (strcmp(action, "cancelCalibration") == 0) {
+        s_cal_cancel = true;
+        ok = true;
     } else {
         cJSON_Delete(json);
         send_result(req, false, "Unknown action");
@@ -1577,6 +1628,125 @@ static esp_err_t api_capture_cancel_post(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"cancelled\"}");
     return ESP_OK;
+}
+
+// ─── Calibration wizard (implementation) ────────────────────────────────────
+
+static void calibration_broadcast(const char *id, int step, const char *msg, int position)
+{
+    char buf[200];
+    snprintf(buf, sizeof(buf),
+        "{\"type\":\"calibration_progress\",\"id\":\"%s\",\"step\":%d,\"message\":\"%s\",\"position\":%d}",
+        id, step, msg, position);
+    web_server_broadcast_message(buf);
+}
+
+static bool wait_for_stopped(const char *deviceID, int step, const char *msg, float target_approx, int timeout_s)
+{
+    for (int elapsed = 0; elapsed < timeout_s * 2; elapsed++) // poll every 500ms
+    {
+        if (s_cal_cancel) return false;
+
+        // Poll device status
+        if (s_manager && s_manager->mIoHome)
+            s_manager->mIoHome->ForceDeviceStatusUpdate(deviceID);
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+
+        if (s_manager)
+        {
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceID);
+            bool stopped = (it != s_manager->mIoDevices.end()) && it->second.is_stopped;
+            int pos = (it != s_manager->mIoDevices.end() && it->second.position != iohome::UNKNOWN_POSITION)
+                      ? (int)it->second.position : -1;
+            s_manager->mIoDevicesMutex.unlock();
+
+            if (pos >= 0)
+                calibration_broadcast(deviceID, step, msg, pos);
+
+            if (stopped)
+                return true;
+        }
+    }
+    return false; // timeout
+}
+
+static void calibration_task(void *arg)
+{
+    auto *a = static_cast<CalibrationArg *>(arg);
+    const char *id = a->deviceID;
+    s_cal_cancel = false;
+
+    int64_t t0, t1, t2, t3;
+    uint32_t transit_close_ms = 0, transit_open_ms = 0;
+
+    // Step 1: Move to open position
+    calibration_broadcast(id, 1, "Moving to open position\xe2\x80\xa6", -1);
+    if (s_manager && s_manager->mIoHome)
+        s_manager->mIoHome->OpenDevice(id);
+    if (!wait_for_stopped(id, 1, "Moving to open position\xe2\x80\xa6", 0, 120)) {
+        char buf[150];
+        snprintf(buf, sizeof(buf), "{\"type\":\"calibration_failed\",\"id\":\"%s\",\"reason\":\"%s\"}", id,
+            s_cal_cancel ? "cancelled" : "timeout");
+        web_server_broadcast_message(buf);
+        goto done;
+    }
+
+    // Step 2: Measure close travel
+    calibration_broadcast(id, 2, "Measuring close travel\xe2\x80\xa6", 0);
+    t0 = esp_timer_get_time();
+    if (s_manager && s_manager->mIoHome)
+        s_manager->mIoHome->CloseDevice(id);
+    if (!wait_for_stopped(id, 2, "Measuring close travel\xe2\x80\xa6", 100, 120)) {
+        // Save partial if we got at least some travel
+        char buf[150];
+        snprintf(buf, sizeof(buf), "{\"type\":\"calibration_failed\",\"id\":\"%s\",\"reason\":\"%s\"}", id,
+            s_cal_cancel ? "cancelled" : "timeout");
+        web_server_broadcast_message(buf);
+        goto done;
+    }
+    t1 = esp_timer_get_time();
+    transit_close_ms = (uint32_t)((t1 - t0) / 1000);
+
+    if (s_cal_cancel) {
+        // Save single-direction provisional value
+        if (s_manager) s_manager->SetTransitTime(id, transit_close_ms);
+        char buf[150];
+        snprintf(buf, sizeof(buf), "{\"type\":\"calibration_failed\",\"id\":\"%s\",\"reason\":\"cancelled\"}", id);
+        web_server_broadcast_message(buf);
+        goto done;
+    }
+
+    // Step 3: Measure open travel
+    calibration_broadcast(id, 3, "Measuring open travel\xe2\x80\xa6", 100);
+    t2 = esp_timer_get_time();
+    if (s_manager && s_manager->mIoHome)
+        s_manager->mIoHome->OpenDevice(id);
+    if (!wait_for_stopped(id, 3, "Measuring open travel\xe2\x80\xa6", 0, 120)) {
+        char buf[150];
+        snprintf(buf, sizeof(buf), "{\"type\":\"calibration_failed\",\"id\":\"%s\",\"reason\":\"%s\"}", id,
+            s_cal_cancel ? "cancelled" : "timeout");
+        web_server_broadcast_message(buf);
+        goto done;
+    }
+    t3 = esp_timer_get_time();
+    transit_open_ms = (uint32_t)((t3 - t2) / 1000);
+
+    {
+        uint32_t avg_ms = (transit_close_ms + transit_open_ms) / 2;
+        if (s_manager) s_manager->SetTransitTime(id, avg_ms);
+        char buf[150];
+        snprintf(buf, sizeof(buf),
+            "{\"type\":\"calibration_done\",\"id\":\"%s\",\"transit_time_ms\":%" PRIu32 "}", id, avg_ms);
+        web_server_broadcast_message(buf);
+        ESP_LOGI(TAG, "Calibration done for %s: close=%" PRIu32 "ms open=%" PRIu32 "ms avg=%" PRIu32 "ms", id, transit_close_ms, transit_open_ms, avg_ms);
+    }
+
+done:
+    s_cal_device_id[0] = '\0';
+    delete a;
+    vTaskDelete(nullptr);
 }
 
 // ─── Server startup ─────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ namespace iohome
   typedef void (*UpdatedDeviceCallback)(const std::string deviceID, const IoDevice &device);   // Callback to receive status update of devices
   typedef void (*UnknownSenderCallback)(const std::string &senderID);                          // Callback when a frame from an unregistered sender is received
   typedef void (*KeySniffCallback)(const std::string &hexKey);                                 // Callback when a key is captured during passive sniffing
+  typedef void (*MovementStartedCallback)(const std::string &deviceID, uint32_t transit_time_ms, float distance_fraction); // Callback when movement tracking starts
 
   /**
    * @brief io-homecontrol Node Controller
@@ -83,6 +84,10 @@ namespace iohome
     /// @brief Register callback for frames from unregistered senders (useful for remote capture)
     /// @param cb Callback function, or nullptr to unregister
     void SetUnknownSenderCallback(UnknownSenderCallback cb);
+
+    /// @brief Register callback invoked when movement tracking starts (for confirmation poll scheduling)
+    /// @param cb Callback function, or nullptr to unregister
+    void SetMovementStartedCallback(MovementStartedCallback cb);
 
     /// @brief Register callback invoked when a key is captured during passive sniffing
     /// @param cb Callback function, or nullptr to unregister

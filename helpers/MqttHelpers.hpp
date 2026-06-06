@@ -34,6 +34,11 @@ namespace Helpers
         /// @param deviceId IO device ID
         void SendIoDeviceStatus(const std::string &deviceId);
 
+        /// @brief Publish an estimated (in-flight) position to MQTT, non-retained
+        /// @param deviceId IO device ID
+        /// @param position Estimated position (0-100)
+        void PublishEstimatedPosition(const std::string &deviceId, int position);
+
         const std::string &GetTopicPrefix() { return mTopicPrefix; }
 
         /// @brief Returns pointer to IoRtsManager instance
