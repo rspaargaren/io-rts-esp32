@@ -38,6 +38,7 @@ build/
 flasher_args.json # Generated in build directory
 sdkconfig*.old
 sdkconfig
+sdkconfig.heltec
 
 # ESP-IDF dependencies
 dependencies.lock

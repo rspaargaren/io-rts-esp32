@@ -6,6 +6,11 @@ cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(MINIMAL_BUILD ON)
+
+if(DEFINED APP_VERSION)
+    set(PROJECT_VER "${APP_VERSION}")
+endif()
+
 project(io-rts-esp32)
 
 littlefs_create_partition_image(web ${CMAKE_SOURCE_DIR}/web_data FLASH_IN_PROJECT)
