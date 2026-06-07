@@ -150,6 +150,70 @@
         }
     }
 
+    // ── Network Config (hostname / DHCP / static IP) ─────────────────────────
+
+    async function loadNetworkConfig(app) {
+        try {
+            const r = await window.MiOpenApi.requestJson("/api/network/config");
+            app.elements.netHostname.value = r.hostname || "";
+            var isDhcp = r.dhcp !== false;
+            app.elements.netDhcp.checked = isDhcp;
+            app.elements.netDhcpToggle.classList.toggle("on", isDhcp);
+            app.elements.netStaticFields.style.display = isDhcp ? "none" : "flex";
+            app.elements.netIp.value      = r.ip      || "";
+            app.elements.netMask.value    = r.mask    || "";
+            app.elements.netGateway.value = r.gateway || "";
+            app.elements.netDns1.value    = r.dns1    || "";
+            app.elements.netDns2.value    = r.dns2    || "";
+            app.elements.netSntp.value    = r.sntp    || "";
+        } catch (e) { /* silently ignore */ }
+    }
+
+    async function saveNetworkConfig(app) {
+        var payload = {
+            hostname: app.elements.netHostname.value.trim(),
+            dhcp:     app.elements.netDhcp.checked
+        };
+        if (!app.elements.netDhcp.checked) {
+            payload.ip      = app.elements.netIp.value.trim();
+            payload.mask    = app.elements.netMask.value.trim();
+            payload.gateway = app.elements.netGateway.value.trim();
+            payload.dns1    = app.elements.netDns1.value.trim();
+            payload.dns2    = app.elements.netDns2.value.trim();
+            payload.sntp    = app.elements.netSntp.value.trim();
+        }
+        try {
+            var r = await window.MiOpenApi.postJson("/api/network/config", payload);
+            if (!r.success) { showToast(r.message || "Save failed.", "error"); return; }
+            showToast("Network settings saved — rebooting…", "info", 8000);
+            fetch("/api/reboot", { method: "POST" }).catch(function(){});
+        } catch (e) {
+            showToast("Error saving network config: " + (e.message || e), "error");
+        }
+    }
+
+    function initNetworkConfig(app) {
+        app.elements.netHostname    = document.getElementById("net-hostname");
+        app.elements.netDhcp        = document.getElementById("net-dhcp");
+        app.elements.netDhcpToggle  = document.getElementById("net-dhcp-toggle");
+        app.elements.netStaticFields= document.getElementById("net-static-fields");
+        app.elements.netIp          = document.getElementById("net-ip");
+        app.elements.netMask        = document.getElementById("net-mask");
+        app.elements.netGateway     = document.getElementById("net-gateway");
+        app.elements.netDns1        = document.getElementById("net-dns1");
+        app.elements.netDns2        = document.getElementById("net-dns2");
+        app.elements.netSntp        = document.getElementById("net-sntp");
+
+        app.elements.netDhcpToggle.addEventListener("click", function () {
+            app.elements.netDhcp.checked = !app.elements.netDhcp.checked;
+            app.elements.netDhcpToggle.classList.toggle("on", app.elements.netDhcp.checked);
+            app.elements.netStaticFields.style.display = app.elements.netDhcp.checked ? "none" : "flex";
+        });
+
+        document.getElementById("net-config-save").addEventListener("click", function () { saveNetworkConfig(app); });
+        loadNetworkConfig(app);
+    }
+
     // ── IO Controller Config ──────────────────────────────────────────────────
 
     async function loadIoConfig(app) {
@@ -448,6 +512,7 @@
         document.getElementById("wifi-config-save").addEventListener("click", function () { app.saveWifiConfig(); });
         loadWifiConfig(app);
 
+        initNetworkConfig(app);
         initIoConfig(app);
         initAccessPassword(app);
         initIoKey(app);

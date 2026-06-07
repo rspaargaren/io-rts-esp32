@@ -1318,6 +1318,64 @@ static esp_err_t api_misc_password_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── GET /api/network/config ────────────────────────────────────────────────
+
+static esp_err_t api_network_config_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "hostname", Config::NetworkConfig::GetHostname().c_str());
+    cJSON_AddBoolToObject(obj,   "dhcp",     Config::NetworkConfig::isDHCP());
+    cJSON_AddStringToObject(obj, "ip",       Config::NetworkConfig::GetIpAddress().c_str());
+    cJSON_AddStringToObject(obj, "mask",     Config::NetworkConfig::GetNetworkMask().c_str());
+    cJSON_AddStringToObject(obj, "gateway",  Config::NetworkConfig::GetGatewayAddress().c_str());
+    cJSON_AddStringToObject(obj, "dns1",     Config::NetworkConfig::GetMainDNSAddress().c_str());
+    cJSON_AddStringToObject(obj, "dns2",     Config::NetworkConfig::GetBackupDNSAddress().c_str());
+    cJSON_AddStringToObject(obj, "sntp",     Config::NetworkConfig::GetSNTPAddress().c_str());
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/network/config ───────────────────────────────────────────────
+
+static esp_err_t api_network_config_post(httpd_req_t *req)
+{
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    auto get_str = [&](const char *key) -> std::string {
+        cJSON *item = cJSON_GetObjectItem(json, key);
+        return cJSON_IsString(item) ? std::string(item->valuestring) : "";
+    };
+
+    std::string hostname = get_str("hostname");
+    if (!hostname.empty()) Config::NetworkConfig::SetHostname(hostname);
+
+    cJSON *jDhcp = cJSON_GetObjectItem(json, "dhcp");
+    if (cJSON_IsBool(jDhcp)) Config::NetworkConfig::SetDHCP(cJSON_IsTrue(jDhcp));
+
+    std::string ip      = get_str("ip");
+    std::string mask    = get_str("mask");
+    std::string gateway = get_str("gateway");
+    std::string dns1    = get_str("dns1");
+    std::string dns2    = get_str("dns2");
+    std::string sntp    = get_str("sntp");
+
+    if (!ip.empty())      Config::NetworkConfig::SetIpAddress(ip);
+    if (!mask.empty())    Config::NetworkConfig::SetNetworkMask(mask);
+    if (!gateway.empty()) Config::NetworkConfig::SetGatewayAddress(gateway);
+    if (!dns1.empty())    Config::NetworkConfig::SetMainDNSAddress(dns1);
+    if (!dns2.empty())    Config::NetworkConfig::SetBackupDNSAddress(dns2);
+    if (!sntp.empty())    Config::NetworkConfig::SetSNTPAddress(sntp);
+
+    cJSON_Delete(json);
+    send_result(req, true, "Network config saved — reboot to apply");
+    return ESP_OK;
+}
+
 // ─── Download / Upload helpers ──────────────────────────────────────────────
 
 static esp_err_t read_multipart_content(httpd_req_t *req, char **out)
@@ -1933,6 +1991,8 @@ void web_server_start(void *ioRtsManager)
     reg("/api/io/config",         HTTP_GET,  api_io_config_get);
     reg("/api/io/config",         HTTP_POST, api_io_config_post);
     reg("/api/misc/password",     HTTP_POST, api_misc_password_post);
+    reg("/api/network/config",    HTTP_GET,  api_network_config_get);
+    reg("/api/network/config",    HTTP_POST, api_network_config_post);
     reg("/api/wifi/config",       HTTP_GET,  api_wifi_config_get);
     reg("/api/wifi/config",       HTTP_POST, api_wifi_config_post);
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI

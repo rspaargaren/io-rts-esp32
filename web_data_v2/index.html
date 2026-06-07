@@ -115,6 +115,52 @@
             <div class="field-status" id="wifi-config-status"></div>
             <p class="restart-notice">⚠ Device will restart after saving.</p>
           </div>
+          <!-- Hostname & IP -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <div style="display:flex;gap:6px;align-items:flex-end;">
+              <div style="flex:2">
+                <label style="font-size:11px;color:var(--text3);">Hostname</label>
+                <input type="text" id="net-hostname" class="s-input" placeholder="io-rts-esp32" maxlength="32" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;display:flex;align-items:center;gap:8px;padding-bottom:2px;">
+                <span style="font-size:12px;color:var(--text2);">DHCP</span>
+                <div class="s-toggle" id="net-dhcp-toggle"></div>
+                <input type="checkbox" id="net-dhcp" style="display:none">
+              </div>
+            </div>
+            <div id="net-static-fields" style="display:none;flex-direction:column;gap:6px;">
+              <div style="display:flex;gap:6px;">
+                <div style="flex:2">
+                  <label style="font-size:11px;color:var(--text3);">IP Address</label>
+                  <input type="text" id="net-ip" class="s-input" placeholder="192.168.1.100" style="margin-top:4px;">
+                </div>
+                <div style="flex:1">
+                  <label style="font-size:11px;color:var(--text3);">Subnet mask</label>
+                  <input type="text" id="net-mask" class="s-input" placeholder="255.255.255.0" style="margin-top:4px;">
+                </div>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <div style="flex:1">
+                  <label style="font-size:11px;color:var(--text3);">Gateway</label>
+                  <input type="text" id="net-gateway" class="s-input" placeholder="192.168.1.1" style="margin-top:4px;">
+                </div>
+                <div style="flex:1">
+                  <label style="font-size:11px;color:var(--text3);">DNS 1</label>
+                  <input type="text" id="net-dns1" class="s-input" placeholder="8.8.8.8" style="margin-top:4px;">
+                </div>
+                <div style="flex:1">
+                  <label style="font-size:11px;color:var(--text3);">DNS 2</label>
+                  <input type="text" id="net-dns2" class="s-input" placeholder="8.8.4.4" style="margin-top:4px;">
+                </div>
+              </div>
+              <div>
+                <label style="font-size:11px;color:var(--text3);">SNTP server</label>
+                <input type="text" id="net-sntp" class="s-input" placeholder="pool.ntp.org" style="margin-top:4px;">
+              </div>
+            </div>
+            <button class="s-btn primary" id="net-config-save">Save Network</button>
+            <p class="restart-notice">⚠ Device will restart after saving.</p>
+          </div>
           <!-- Fallback AP -->
           <div class="settings-row">
             <span class="row-label">Fallback AP</span>
