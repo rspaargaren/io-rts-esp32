@@ -164,7 +164,6 @@
             app.elements.netMask.value    = r.mask    || "";
             app.elements.netGateway.value = r.gateway || "";
             app.elements.netDns1.value    = r.dns1    || "";
-            app.elements.netDns2.value    = r.dns2    || "";
             app.elements.netSntp.value    = r.sntp    || "";
         } catch (e) { /* silently ignore */ }
     }
@@ -179,7 +178,6 @@
             payload.mask    = app.elements.netMask.value.trim();
             payload.gateway = app.elements.netGateway.value.trim();
             payload.dns1    = app.elements.netDns1.value.trim();
-            payload.dns2    = app.elements.netDns2.value.trim();
             payload.sntp    = app.elements.netSntp.value.trim();
         }
         try {
@@ -201,7 +199,6 @@
         app.elements.netMask        = document.getElementById("net-mask");
         app.elements.netGateway     = document.getElementById("net-gateway");
         app.elements.netDns1        = document.getElementById("net-dns1");
-        app.elements.netDns2        = document.getElementById("net-dns2");
         app.elements.netSntp        = document.getElementById("net-sntp");
 
         app.elements.netDhcpToggle.addEventListener("click", function () {
