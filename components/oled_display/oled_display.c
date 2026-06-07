@@ -263,7 +263,7 @@ esp_err_t oled_init(void)
         gpio_set_level(CONFIG_OLED_RST_GPIO, 0);
         vTaskDelay(pdMS_TO_TICKS(10));
         gpio_set_level(CONFIG_OLED_RST_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(100));  /* SSD1306 needs ~100ms after RST before accepting commands */
     }
 
     /* I2C master bus — only create if not already initialised */
@@ -295,13 +295,23 @@ esp_err_t oled_init(void)
         return ret;
     }
 
-    /* Send SSD1306 initialisation sequence */
-    for (size_t i = 0; i < sizeof(INIT_CMDS); i++) {
-        ret = send_cmd(INIT_CMDS[i]);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "init cmd 0x%02X failed: %s", INIT_CMDS[i], esp_err_to_name(ret));
-            return ret;
+    /* Send SSD1306 initialisation sequence — retry once on failure */
+    for (int attempt = 0; attempt < 2; attempt++) {
+        ret = ESP_OK;
+        for (size_t i = 0; i < sizeof(INIT_CMDS); i++) {
+            ret = send_cmd(INIT_CMDS[i]);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "init cmd 0x%02X failed (attempt %d): %s",
+                         INIT_CMDS[i], attempt + 1, esp_err_to_name(ret));
+                break;
+            }
         }
+        if (ret == ESP_OK) break;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "display init failed after retry");
+        return ret;
     }
 
     /* Clear display then draw static layout — done before task starts */
