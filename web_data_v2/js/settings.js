@@ -165,16 +165,13 @@
     async function saveIoConfig(app) {
         const nodeId  = app.elements.ioNodeIdInput.value.trim().toUpperCase();
         const txPower = parseInt(app.elements.ioTxPowerInput.value);
-        const statusEl = app.elements.ioConfigStatus;
 
         if (nodeId && !/^[0-9A-F]{6}$/.test(nodeId)) {
-            statusEl.textContent = "Node address must be exactly 6 hex characters.";
-            statusEl.style.color = "var(--red)";
+            showToast("Node address must be exactly 6 hex characters.", "error");
             return;
         }
         if (app.elements.ioTxPowerInput.value !== "" && (isNaN(txPower) || txPower < 0 || txPower > 20)) {
-            statusEl.textContent = "TX Power must be 0–20.";
-            statusEl.style.color = "var(--red)";
+            showToast("TX Power must be 0–20.", "error");
             return;
         }
 
@@ -184,12 +181,10 @@
 
         try {
             const r = await window.MiOpenApi.postJson("/api/io/config", payload);
-            if (!r.success) { statusEl.textContent = r.message || "Save failed."; statusEl.style.color = "var(--red)"; return; }
-            statusEl.textContent = "Saved. Reboot to apply.";
-            statusEl.style.color = "var(--green)";
+            if (!r.success) { showToast(r.message || "Save failed.", "error"); return; }
+            showToast("Controller settings saved. Reboot to apply.", "success");
         } catch (e) {
-            statusEl.textContent = "Error: " + (e.message || e);
-            statusEl.style.color = "var(--red)";
+            showToast("Error saving controller settings: " + (e.message || e), "error");
         }
     }
 
@@ -198,7 +193,6 @@
         app.elements.ioTxPowerInput         = document.getElementById("io-tx-power");
         app.elements.ioPassiveModeCheckbox  = document.getElementById("io-passive-mode");
         app.elements.ioPassiveToggle        = document.getElementById("io-passive-toggle");
-        app.elements.ioConfigStatus         = document.getElementById("io-config-status");
 
         app.elements.ioPassiveToggle.addEventListener("click", function () {
             var chk = app.elements.ioPassiveModeCheckbox;
@@ -215,34 +209,22 @@
     function initAccessPassword(app) {
         app.elements.accessPasswordNew     = document.getElementById("access-password-new");
         app.elements.accessPasswordConfirm = document.getElementById("access-password-confirm");
-        app.elements.accessPasswordStatus  = document.getElementById("access-password-status");
 
         document.getElementById("access-password-save").addEventListener("click", async function () {
             const pwd     = app.elements.accessPasswordNew.value;
             const confirm = app.elements.accessPasswordConfirm.value;
-            const statusEl = app.elements.accessPasswordStatus;
 
-            if (pwd !== confirm) {
-                statusEl.textContent = "Passwords do not match.";
-                statusEl.style.color = "var(--red)";
-                return;
-            }
-            if (pwd.length > 32) {
-                statusEl.textContent = "Password too long (max 32 characters).";
-                statusEl.style.color = "var(--red)";
-                return;
-            }
+            if (pwd !== confirm) { showToast("Passwords do not match.", "error"); return; }
+            if (pwd.length > 32) { showToast("Password too long (max 32 characters).", "error"); return; }
 
             try {
                 const r = await window.MiOpenApi.postJson("/api/misc/password", { password: pwd });
-                if (!r.success) { statusEl.textContent = r.message || "Save failed."; statusEl.style.color = "var(--red)"; return; }
-                statusEl.textContent = pwd ? "Password saved. Reboot to apply." : "Password cleared. Reboot to apply.";
-                statusEl.style.color = "var(--green)";
+                if (!r.success) { showToast(r.message || "Save failed.", "error"); return; }
+                showToast(pwd ? "Password saved. Reboot to apply." : "Password cleared. Reboot to apply.", "success");
                 app.elements.accessPasswordNew.value     = "";
                 app.elements.accessPasswordConfirm.value = "";
             } catch (e) {
-                statusEl.textContent = "Error: " + (e.message || e);
-                statusEl.style.color = "var(--red)";
+                showToast("Error saving password: " + (e.message || e), "error");
             }
         });
     }
