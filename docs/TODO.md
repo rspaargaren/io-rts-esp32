@@ -92,6 +92,12 @@ Source: the WebSocket already broadcasts `position` events; toasts need to be tr
 
 ---
 
+## MQTT — Enable/disable toggle
+
+Add a toggle in Settings → MQTT to disable the MQTT client entirely without clearing the broker configuration. When disabled, no connection is attempted and no "Losing qos0 data" warnings appear in the log. Useful for users who do not use MQTT or have intermittent broker connectivity. Store the enabled state in NVS alongside the existing MQTT config. Expose via `GET /api/mqtt` (add `enabled` field) and `POST /api/mqtt` (accept `enabled` field). Wire the toggle in the web UI next to the broker server field.
+
+---
+
 ## Node.js 24 action upgrades
 
 `actions/checkout@v4` and `softprops/action-gh-release@v2` will stop working on September 16, 2026 when GitHub removes Node.js 20 from runners. Upgrade both actions to Node.js 24 compatible versions before that date.
