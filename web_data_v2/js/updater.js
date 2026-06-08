@@ -87,10 +87,15 @@
             headers: { "Content-Type": "application/json", "X-OTA-Key": otaKey },
             body: JSON.stringify({ url: url, type: type })
         })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-            if (d.status !== "rebooting") throw new Error(d.message || "Unexpected response");
-            onStatus("Rebooting…");
+        .then(function (r) {
+            return r.text().then(function (text) {
+                var d;
+                try { d = JSON.parse(text); } catch (e) {
+                    throw new Error("Server returned unexpected response: " + text.substring(0, 120));
+                }
+                if (d.status === "rebooting") { onStatus("Rebooting…"); return; }
+                throw new Error(d.message || "Unexpected response");
+            });
         });
     }
 

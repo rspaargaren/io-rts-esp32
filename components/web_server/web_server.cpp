@@ -1180,7 +1180,19 @@ static esp_err_t api_ota_url_post(httpd_req_t *req)
         send_result(req, false, "HTTP connect failed");
         return ESP_OK;
     }
-    esp_http_client_fetch_headers(client);
+    if (esp_http_client_fetch_headers(client) < 0) {
+        esp_http_client_close(client); esp_http_client_cleanup(client);
+        send_result(req, false, "HTTP fetch headers failed");
+        return ESP_OK;
+    }
+    int http_status = esp_http_client_get_status_code(client);
+    if (http_status != 200) {
+        esp_http_client_close(client); esp_http_client_cleanup(client);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Download failed: HTTP %d", http_status);
+        send_result(req, false, msg);
+        return ESP_OK;
+    }
 
     // Prepare OTA destination
     esp_ota_handle_t ota_handle = 0;
@@ -1237,7 +1249,7 @@ static esp_err_t api_ota_url_post(httpd_req_t *req)
     ESP_LOGI(TAG, "OTA URL: done (%d bytes), rebooting...", total);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(1500));
     esp_restart();
     return ESP_OK;
 }
