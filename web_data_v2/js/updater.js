@@ -80,28 +80,18 @@
             .catch(function () { setTimeout(function () { pollUntilOnline(deadline, onOnline, onTimeout); }, 3000); });
     }
 
-    function uploadBinary(url, endpoint, otaKey, onProgress) {
-        return fetch(url)
-            .then(function (r) {
-                if (!r.ok) throw new Error("Download failed: " + r.status);
-                return r.arrayBuffer();
-            })
-            .then(function (buf) {
-                onProgress(50);
-                return fetch(endpoint, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/octet-stream",
-                        "X-OTA-Key": otaKey
-                    },
-                    body: buf
-                });
-            })
-            .then(function (r) { return r.json(); })
-            .then(function (d) {
-                onProgress(100);
-                if (d.status !== "rebooting") throw new Error(d.message || "Unexpected response");
-            });
+    function otaFromUrl(url, type, otaKey, onStatus) {
+        onStatus("Device downloading " + type + "…");
+        return fetch("/api/ota/url", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-OTA-Key": otaKey },
+            body: JSON.stringify({ url: url, type: type })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+            if (d.status !== "rebooting") throw new Error(d.message || "Unexpected response");
+            onStatus("Rebooting…");
+        });
     }
 
     function runUpdate(firmwareUrl, webUrl, currentVersion) {
@@ -112,11 +102,9 @@
 
         var otaKey = (document.getElementById("ota-key-display") || {}).value || "";
 
-        setProgress("Downloading firmware…", 0);
+        setProgress("Starting update…", 0);
 
-        uploadBinary(firmwareUrl, "/api/ota", otaKey, function (p) {
-            setProgress(p < 100 ? "Uploading firmware…" : "Firmware uploaded, rebooting…", p);
-        })
+        otaFromUrl(firmwareUrl, "firmware", otaKey, function (s) { setProgress(s, 25); })
         .then(function () {
             setProgress("Waiting for device to come back online…", null);
             return new Promise(function (resolve, reject) {
@@ -126,10 +114,7 @@
             });
         })
         .then(function () {
-            setProgress("Downloading web filesystem…", 0);
-            return uploadBinary(webUrl, "/api/ota/web", otaKey, function (p) {
-                setProgress(p < 100 ? "Uploading web filesystem…" : "Web uploaded, rebooting…", p);
-            });
+            return otaFromUrl(webUrl, "web", otaKey, function (s) { setProgress(s, 75); });
         })
         .then(function () {
             setProgress("Waiting for device to come back online…", null);

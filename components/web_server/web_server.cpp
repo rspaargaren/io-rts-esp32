@@ -7,6 +7,8 @@
 #include "cJSON.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
+#include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -1108,6 +1110,119 @@ static esp_err_t api_ota_web_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── POST /api/ota/url ──────────────────────────────────────────────────────
+// Device downloads firmware or web image directly from a URL (avoids browser CORS
+// restrictions when fetching GitHub release assets cross-origin).
+
+static esp_err_t api_ota_url_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) {
+        send_result(req, false, "Failed to read body");
+        return ESP_OK;
+    }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jUrl  = cJSON_GetObjectItem(json, "url");
+    cJSON *jType = cJSON_GetObjectItem(json, "type");
+    bool is_web  = cJSON_IsString(jType) && strcmp(jType->valuestring, "web") == 0;
+
+    if (!cJSON_IsString(jUrl) || !jUrl->valuestring[0]) {
+        cJSON_Delete(json);
+        send_result(req, false, "Missing url");
+        return ESP_OK;
+    }
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s", jUrl->valuestring);
+    cJSON_Delete(json);
+
+    ESP_LOGI(TAG, "OTA URL: fetching %s (type=%s)", url, is_web ? "web" : "firmware");
+
+    esp_http_client_config_t http_cfg = {};
+    http_cfg.url = url;
+    http_cfg.max_redirection_count = 5;
+    http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    http_cfg.timeout_ms = 30000;
+
+    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    if (!client) { send_result(req, false, "HTTP client init failed"); return ESP_OK; }
+
+    if (esp_http_client_open(client, 0) != ESP_OK) {
+        esp_http_client_cleanup(client);
+        send_result(req, false, "HTTP connect failed");
+        return ESP_OK;
+    }
+    esp_http_client_fetch_headers(client);
+
+    // Prepare OTA destination
+    esp_ota_handle_t ota_handle = 0;
+    const esp_partition_t *ota_part = nullptr;
+    const esp_partition_t *web_part = nullptr;
+    esp_err_t err;
+
+    if (!is_web) {
+        ota_part = esp_ota_get_next_update_partition(NULL);
+        if (!ota_part || (err = esp_ota_begin(ota_part, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle)) != ESP_OK) {
+            esp_http_client_close(client); esp_http_client_cleanup(client);
+            send_result(req, false, "OTA begin failed"); return ESP_OK;
+        }
+    } else {
+        web_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "web");
+        if (!web_part || (err = esp_partition_erase_range(web_part, 0, web_part->size)) != ESP_OK) {
+            esp_http_client_close(client); esp_http_client_cleanup(client);
+            send_result(req, false, "Web partition error"); return ESP_OK;
+        }
+    }
+
+    char buf[1024];
+    int total = 0;
+    bool write_err = false;
+
+    while (true) {
+        int n = esp_http_client_read(client, buf, sizeof(buf));
+        if (n < 0) { write_err = true; break; }
+        if (n == 0) break;
+        err = is_web ? esp_partition_write(web_part, total, buf, n)
+                     : esp_ota_write(ota_handle, buf, n);
+        if (err != ESP_OK) { write_err = true; break; }
+        total += n;
+    }
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    if (write_err) {
+        if (!is_web) esp_ota_abort(ota_handle);
+        ESP_LOGE(TAG, "OTA URL: write error after %d bytes", total);
+        send_result(req, false, "Download/write failed");
+        return ESP_OK;
+    }
+
+    if (!is_web) {
+        if (esp_ota_end(ota_handle) != ESP_OK ||
+            esp_ota_set_boot_partition(ota_part) != ESP_OK) {
+            send_result(req, false, "OTA verify/set boot failed");
+            return ESP_OK;
+        }
+    }
+
+    ESP_LOGI(TAG, "OTA URL: done (%d bytes), rebooting...", total);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 // ─── GET /api/syslog ────────────────────────────────────────────────────────
 
 static esp_err_t api_syslog_get(httpd_req_t *req)
@@ -2022,6 +2137,7 @@ void web_server_start(void *ioRtsManager)
     reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
     reg("/api/ota",               HTTP_POST, api_ota_post);
+    reg("/api/ota/url",           HTTP_POST, api_ota_url_post);
     reg("/api/ota/web",           HTTP_POST, api_ota_web_post);
     reg("/api/ota/key",           HTTP_GET,  api_ota_key_get);
     reg("/api/ota/key",           HTTP_POST, api_ota_key_post);
