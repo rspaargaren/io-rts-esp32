@@ -1006,6 +1006,17 @@ static esp_err_t api_ota_post(httpd_req_t *req)
             write_err = true;
             break;
         }
+        // Check magic byte of first chunk — 0xE9 is the ESP app image magic.
+        // full.bin starts with 0xFF padding and must not be used for OTA.
+        if (total == 0 && n > 0 && (uint8_t)buf[0] != 0xE9) {
+            ESP_LOGE(TAG, "OTA: bad magic 0x%02x — use firmware.bin, not full.bin", (uint8_t)buf[0]);
+            esp_ota_abort(ota_handle);
+            // drain remaining body so HTTP connection stays clean
+            char drain[256];
+            while (remaining > n) { remaining -= n; n = httpd_req_recv(req, drain, sizeof(drain)); if (n <= 0) break; }
+            send_result(req, false, "Wrong file — use the -firmware.bin file, not -full.bin or -web.bin");
+            return ESP_OK;
+        }
         err = esp_ota_write(ota_handle, buf, n);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
@@ -1025,7 +1036,7 @@ static esp_err_t api_ota_post(httpd_req_t *req)
     err = esp_ota_end(ota_handle);
     ESP_LOGI(TAG, "esp_ota_end: %s (%d bytes written)", esp_err_to_name(err), total);
     if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA verify failed");
+        send_result(req, false, "OTA verify failed — use the -firmware.bin file from the GitHub release, not -full.bin or -web.bin");
         return ESP_OK;
     }
 
