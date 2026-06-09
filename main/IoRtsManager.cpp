@@ -431,6 +431,7 @@ namespace IoRts
     struct ConfirmPollArg {
         IoRtsManager *manager;
         char deviceID[8]; // 6-char hex + null
+        esp_timer_handle_t timer;  // handle so the callback can delete itself
     };
 
     static void confirmation_poll_cb(void *arg)
@@ -441,6 +442,7 @@ namespace IoRts
             ESP_LOGI("ioRtsMan", "Confirmation poll for %s", a->deviceID);
             a->manager->mIoHome->ForceDeviceStatusUpdate(a->deviceID);
         }
+        if (a->timer) esp_timer_delete(a->timer);
         delete a;
     }
 
@@ -457,14 +459,19 @@ namespace IoRts
         arg->manager = this;
         strncpy(arg->deviceID, deviceID.c_str(), sizeof(arg->deviceID) - 1);
         arg->deviceID[sizeof(arg->deviceID) - 1] = '\0';
+        arg->timer = nullptr;
 
         esp_timer_create_args_t ta = {};
         ta.callback = confirmation_poll_cb;
         ta.arg = arg;
         ta.name = "conf_poll";
         esp_timer_handle_t th;
-        if (esp_timer_create(&ta, &th) == ESP_OK)
+        if (esp_timer_create(&ta, &th) == ESP_OK) {
+            arg->timer = th;
             esp_timer_start_once(th, delay_us);
+        } else {
+            delete arg;
+        }
     }
 
     bool IoRtsManager::SetTransitTime(const std::string &deviceID, uint32_t transit_time_ms)
@@ -533,6 +540,8 @@ namespace IoRts
 
     void IoRtsManager::InitializeIo()
     {
+        mIoPassive = IoHomeConfig::isPassiveModeEnabled();
+
         // Initialize IO-HOMECONTROL
         mSX1276Radio = new RadioLinks::RadioSX1276(Config::GetSX1276SpiHost(),
                                                    CONFIG_IOHOMECONTROL_SX1276_SPI_CS, CONFIG_IOHOMECONTROL_SX1276_RST,

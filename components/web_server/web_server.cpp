@@ -190,8 +190,14 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
     if (is_new) {
         s_diag_last_fd = fd;
+        bool stored = false;
         for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-            if (s_ws_fds[i] == -1) { s_ws_fds[i] = fd; break; }
+            if (s_ws_fds[i] == -1) { s_ws_fds[i] = fd; stored = true; break; }
+        }
+        if (!stored) {
+            ESP_LOGW(TAG, "ws: max clients reached, rejecting fd=%d", fd);
+            httpd_sess_trigger_close(req->handle, fd);
+            return ESP_OK;
         }
         // Drain the trigger frame (browser sends {"type":"hello"} on open)
         httpd_ws_frame_t hello = {};
@@ -1237,6 +1243,14 @@ static esp_err_t api_ota_url_post(httpd_req_t *req)
         int n = esp_http_client_read(client, buf, sizeof(buf));
         if (n < 0) { write_err = true; break; }
         if (n == 0) break;
+        if (!is_web && total == 0 && n > 0 && (uint8_t)buf[0] != 0xE9) {
+            ESP_LOGE(TAG, "OTA URL: bad magic 0x%02x — aborting", (uint8_t)buf[0]);
+            esp_ota_abort(ota_handle);
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+            send_result(req, false, "Wrong file — server returned an invalid firmware image (bad magic byte)");
+            return ESP_OK;
+        }
         err = is_web ? esp_partition_write(web_part, total, buf, n)
                      : esp_ota_write(ota_handle, buf, n);
         if (err != ESP_OK) { write_err = true; break; }
@@ -1288,6 +1302,7 @@ static esp_err_t api_syslog_get(httpd_req_t *req)
 
 static esp_err_t api_syslog_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) {
         send_result(req, false, "Failed to read body");
@@ -1331,6 +1346,7 @@ static esp_err_t api_syslog_post(httpd_req_t *req)
 
 static esp_err_t api_reboot_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     ESP_LOGI(TAG, "Reboot requested via web");
     send_result(req, true, "Rebooting");
     esp_timer_handle_t t;
@@ -1358,6 +1374,7 @@ static esp_err_t api_io_key_get(httpd_req_t *req)
 
 static esp_err_t api_io_key_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
 
@@ -1481,6 +1498,7 @@ static esp_err_t api_io_config_post(httpd_req_t *req)
 
 static esp_err_t api_misc_password_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
 
@@ -1542,6 +1560,7 @@ static esp_err_t api_network_config_get(httpd_req_t *req)
 
 static esp_err_t api_network_config_post(httpd_req_t *req)
 {
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
     char *body = nullptr;
     if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
 
@@ -1589,9 +1608,13 @@ static esp_err_t read_multipart_content(httpd_req_t *req, char **out)
     char *body = (char *)malloc(body_len + 1);
     if (!body) return ESP_ERR_NO_MEM;
 
-    int n = httpd_req_recv(req, body, body_len);
-    if (n <= 0) { free(body); return ESP_FAIL; }
-    body[n] = '\0';
+    size_t received = 0;
+    while (received < body_len) {
+        int n = httpd_req_recv(req, body + received, body_len - received);
+        if (n <= 0) { free(body); return ESP_FAIL; }
+        received += n;
+    }
+    body[received] = '\0';
 
     // Find end of part headers (\r\n\r\n)
     const char *content_start = strstr(body, "\r\n\r\n");

@@ -203,8 +203,19 @@
             } else {
                 // Remove from all, then re-link to checked
                 await window.MiOpenApi.postJson("/api/action", { action: "unlinkRemote", remoteId: _capturedId });
+                var linkErrors = [];
                 for (var j = 0; j < checkedIds.length; j++) {
-                    await window.MiOpenApi.postJson("/api/action", { action: "linkRemote", remoteId: _capturedId, deviceId: checkedIds[j] });
+                    try {
+                        await window.MiOpenApi.postJson("/api/action", { action: "linkRemote", remoteId: _capturedId, deviceId: checkedIds[j] });
+                    } catch (linkErr) {
+                        linkErrors.push(checkedIds[j]);
+                    }
+                }
+                if (linkErrors.length > 0) {
+                    err.textContent = "Some devices could not be linked: " + linkErrors.join(", ") + ". The remote may be partially linked.";
+                    saveBtn.disabled = false;
+                    await fetchAndDisplayRemotes(_app);
+                    return;
                 }
                 showToast("Remote " + _capturedId + " updated.", "success");
             }

@@ -507,7 +507,7 @@ namespace Helpers
                             else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_POSITION_TOPIC)) // it should be a position between 0 and 100
                             {
                                 float position = strtof(command.c_str(), NULL);
-                                if (position >= (float)0.0 || position <= (float)100.0)
+                                if (position >= (float)0.0 && position <= (float)100.0)
                                 {
                                     mqttHelper->GetIoRtsManager()->mIoHome->SetDevicePosition(deviceID, position);
                                 }

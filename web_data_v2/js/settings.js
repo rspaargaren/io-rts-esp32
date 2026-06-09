@@ -73,7 +73,7 @@
                 retries_running:  parseInt(app.elements.fallbackRetriesRunning.value) || 3,
                 ap_timeout_s:     parseInt(app.elements.fallbackTimeout.value)        || 0
             });
-            if (!r.success) { showToast(r.message || "Save failed.", "error"); return; }
+            if (!r.success && !r.ok) { showToast(r.message || "Save failed.", "error"); return; }
             showToast("Fallback AP settings saved.", "success");
         } catch (e) {
             showToast("Error saving fallback config.", "error");
@@ -110,7 +110,12 @@
 
         try {
             const wr = await window.MiOpenApi.postJson("/api/wifi/config", payload);
-            if (!wr.success) { showToast(wr.message || "WiFi save failed.", "error"); return; }
+            if (wr.status === "restarting") {
+                // success — fall through to reconnect poll
+            } else if (!wr.success) {
+                showToast(wr.message || "WiFi save failed.", "error");
+                return;
+            }
             showToast("WiFi saved — restarting…", "info", 8000);
             const poll = setInterval(async function () {
                 try {
@@ -204,7 +209,7 @@
             app.elements.netGateway.value = r.gateway || "";
             app.elements.netDns1.value    = r.dns1    || "";
             app.elements.netSntp.value    = r.sntp    || "";
-        } catch (e) { /* silently ignore */ }
+        } catch (e) { showToast("Failed to load network config.", "error"); }
     }
 
     async function saveNetworkConfig(app) {
@@ -259,7 +264,7 @@
             app.elements.ioTxPowerInput.value = r.tx_power  ?? "";
             app.elements.ioPassiveModeCheckbox.checked = !!r.passive_mode;
             app.elements.ioPassiveToggle.classList.toggle("on", !!r.passive_mode);
-        } catch (e) { /* silently ignore */ }
+        } catch (e) { showToast("Failed to load controller config.", "error"); }
     }
 
     async function saveIoConfig(app) {
