@@ -19,7 +19,8 @@
                 const row = document.createElement("tr");
                 const cell = document.createElement("td");
                 cell.colSpan = 4;
-                cell.textContent = "No remotes available.";
+                cell.style.cssText = "text-align:center;padding:24px;opacity:0.55;font-size:0.9em;";
+                cell.textContent = "No remotes linked yet. Use the + button to add one.";
                 row.appendChild(cell);
                 tbody.appendChild(row);
                 return;
@@ -127,7 +128,7 @@
                 showInput: true,
                 showTiming: true,
                 btnShowDelete: false,
-                btnShowCancel: false,
+                btnShowCancel: true,
                 timingLabel: app.i18nText("popup.remote_name_label", "Remote Name:"),
                 onSave: async function (addr, newName) {
                     const id = addr.trim().toUpperCase();

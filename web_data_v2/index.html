@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="charcoal">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="page.title">io-homecontrol</title>
+  <script>
+    (function(){var t=localStorage.getItem('v2theme');if(t)document.documentElement.setAttribute('data-theme',t);})();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- HEADER -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="app-dot" id="conn-dot"></div>
+      <span class="app-wordmark">io-homecontrol</span>
+    </div>
+    <div class="header-right">
+      <div id="pairing-badge" style="display:none"></div>
+      <span class="pill amber hidden" id="moving-pill"></span>
+      <select class="hdr-btn" id="lang" style="border:none;cursor:pointer;">
+        <option value="nl">NL</option>
+        <option value="en">EN</option>
+        <option value="de">DE</option>
+        <option value="fr">FR</option>
+      </select>
+      <button class="hdr-btn" id="theme-btn">
+        <span id="theme-icon">◑</span>
+        <span id="theme-label">Navy</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- UPDATE BANNER -->
+  <div id="update-banner" style="display:none;">
+    <div class="update-banner-inner">
+      <div class="update-banner-info">
+        <span class="update-banner-version" id="update-banner-version"></span>
+        <a class="update-banner-link" id="update-banner-link" target="_blank" rel="noopener">What's new</a>
+      </div>
+      <div class="update-banner-actions">
+        <button class="update-banner-dismiss" id="update-dismiss">&#x2715;</button>
+        <button class="update-banner-btn" id="update-start-btn">Update</button>
+      </div>
+    </div>
+    <div class="update-progress" id="update-progress" style="display:none;">
+      <div class="update-progress-label" id="update-progress-label">Downloading firmware&hellip;</div>
+      <progress class="update-progress-bar" id="update-progress-bar" max="100" value="0"></progress>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <main>
+
+    <!-- ── DEVICES VIEW ── -->
+    <section class="view active" id="view-devices">
+      <div class="view-header">
+        <h2 class="view-title" data-i18n="nav.devices">Devices</h2>
+        <span id="count-pill" style="font-size:11px;color:var(--text3);margin-right:auto;padding-left:8px;"></span>
+        <button class="view-add-btn" id="pair-device-btn" title="Pair new device">+</button>
+      </div>
+      <ul id="device-list"></ul>
+    </section>
+
+    <!-- ── LOG VIEW ── -->
+    <section class="view" id="view-log">
+      <div class="view-header">
+        <h2 class="view-title" data-i18n="nav.help">Log</h2>
+      </div>
+      <div class="log-toolbar">
+        <button class="log-filter-btn active" data-filter="all"  data-i18n="filter.all">All</button>
+        <button class="log-filter-btn"        data-filter="info" data-i18n="filter.info">Info</button>
+        <button class="log-filter-btn"        data-filter="off"  data-i18n="filter.off">Off</button>
+      </div>
+      <div id="status-messages"></div>
+      <!-- hidden compat element -->
+      <select id="select-log" style="display:none">
+        <option value="all">All</option>
+        <option value="info">Info</option>
+        <option value="off">Off</option>
+      </select>
+    </section>
+
+    <!-- ── SETTINGS VIEW ── -->
+    <section class="view" id="view-settings">
+      <div class="view-header">
+        <h2 class="view-title" data-i18n="nav.settings">Settings</h2>
+      </div>
+
+      <!-- NETWORK -->
+      <div class="settings-group">
+        <div class="settings-group-label">Network</div>
+        <div class="settings-card">
+          <!-- WiFi SSID -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span class="row-label">WiFi</span>
+              <span class="row-status connected" id="fallback-status"></span>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Network name (SSID)</label>
+                <div style="display:flex;gap:6px;margin-top:4px;">
+                  <input type="text" id="wifi-ssid" class="s-input" placeholder="Network name" maxlength="32" style="flex:1;">
+                  <button class="s-btn" id="wifi-scan-btn">Scan</button>
+                </div>
+              </div>
+            </div>
+            <div id="wifi-scan-results" style="display:none;"></div>
+            <div>
+              <label style="font-size:11px;color:var(--text3);">Password</label>
+              <input type="password" id="wifi-password" class="s-input" placeholder="Leave blank to keep current" style="margin-top:4px;">
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button class="s-btn primary" id="wifi-config-save" style="flex:1;">Save WiFi</button>
+            </div>
+            <div class="field-status" id="wifi-config-status"></div>
+            <p class="restart-notice">⚠ Device will restart after saving.</p>
+          </div>
+          <!-- Hostname & IP -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <div style="display:flex;gap:6px;align-items:flex-end;">
+              <div style="flex:2">
+                <label style="font-size:11px;color:var(--text3);">Hostname</label>
+                <input type="text" id="net-hostname" class="s-input" placeholder="io-rts-esp32" maxlength="32" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;display:flex;align-items:center;gap:8px;padding-bottom:2px;">
+                <span style="font-size:12px;color:var(--text2);">DHCP</span>
+                <div class="s-toggle" id="net-dhcp-toggle"></div>
+                <input type="checkbox" id="net-dhcp" style="display:none">
+              </div>
+            </div>
+            <div id="net-static-fields" style="display:none;flex-direction:column;gap:6px;">
+              <div style="display:flex;gap:6px;">
+                <div style="flex:2">
+                  <label style="font-size:11px;color:var(--text3);">IP Address</label>
+                  <input type="text" id="net-ip" class="s-input" placeholder="192.168.1.100" style="margin-top:4px;">
+                </div>
+                <div style="flex:1">
+                  <label style="font-size:11px;color:var(--text3);">Subnet mask</label>
+                  <input type="text" id="net-mask" class="s-input" placeholder="255.255.255.0" style="margin-top:4px;">
+                </div>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <div style="flex:1">
+                  <label style="font-size:11px;color:var(--text3);">Gateway</label>
+                  <input type="text" id="net-gateway" class="s-input" placeholder="192.168.1.1" style="margin-top:4px;">
+                </div>
+                <div style="flex:1">
+                  <label style="font-size:11px;color:var(--text3);">DNS</label>
+                  <input type="text" id="net-dns1" class="s-input" placeholder="8.8.8.8" style="margin-top:4px;">
+                </div>
+              </div>
+              <div>
+                <label style="font-size:11px;color:var(--text3);">SNTP server</label>
+                <input type="text" id="net-sntp" class="s-input" placeholder="pool.ntp.org" style="margin-top:4px;">
+              </div>
+            </div>
+            <button class="s-btn primary" id="net-config-save">Save Network</button>
+            <p class="restart-notice">⚠ Device will restart after saving.</p>
+          </div>
+          <!-- Fallback AP -->
+          <div class="settings-row">
+            <span class="row-label">Fallback AP</span>
+            <div class="row-right">
+              <div class="s-toggle on" id="fallback-toggle"></div>
+              <input type="checkbox" id="fallback-enabled" style="display:none">
+            </div>
+          </div>
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;display:none;" id="fallback-extra">
+            <div style="display:flex;gap:8px;">
+              <div style="flex:1">
+                <label style="font-size:11px;color:var(--text3);">Retries (boot)</label>
+                <input type="number" id="fallback-retries-boot" class="s-input" min="1" max="20" placeholder="3" style="margin-top:4px;">
+              </div>
+              <div style="flex:1">
+                <label style="font-size:11px;color:var(--text3);">Retries (running)</label>
+                <input type="number" id="fallback-retries-running" class="s-input" min="1" max="20" placeholder="3" style="margin-top:4px;">
+              </div>
+              <div style="flex:1">
+                <label style="font-size:11px;color:var(--text3);">Timeout (s)</label>
+                <input type="number" id="fallback-timeout" class="s-input" min="0" max="3600" placeholder="600" style="margin-top:4px;">
+              </div>
+            </div>
+            <button class="s-btn primary" id="fallback-save">Save Fallback</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- INTEGRATION -->
+      <div class="settings-group">
+        <div class="settings-group-label">Integration</div>
+        <div class="settings-card">
+          <!-- MQTT -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span class="row-label">MQTT</span>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="row-status" id="mqtt-conn-status"></span>
+                <div class="s-toggle" id="mqtt-enabled-toggle"></div>
+                <input type="checkbox" id="mqtt-enabled" style="display:none">
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <div style="flex:2;">
+                <label style="font-size:11px;color:var(--text3);">Broker address</label>
+                <input type="text" id="mqtt-server" class="s-input" placeholder="192.168.1.x or hostname" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Port</label>
+                <input type="text" id="mqtt-port" class="s-input" placeholder="1883 / 8883 (TLS)" style="margin-top:4px;">
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Username</label>
+                <input type="text" id="mqtt-user" class="s-input" placeholder="leave blank if none" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Password</label>
+                <input type="password" id="mqtt-password" class="s-input" placeholder="leave blank if none" style="margin-top:4px;">
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Client ID</label>
+                <input type="text" id="mqtt-client-id" class="s-input" placeholder="blank = auto-generated" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Topic prefix</label>
+                <input type="text" id="mqtt-topic" class="s-input" placeholder="e.g. home/io-rts" style="margin-top:4px;">
+              </div>
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text3);">Home Assistant discovery prefix</label>
+              <input type="text" id="mqtt-discovery" class="s-input" placeholder="e.g. homeassistant/device/io-rts" style="margin-top:4px;">
+            </div>
+            <button class="s-btn primary" id="mqtt-update">Save MQTT</button>
+          </div>
+          <!-- Syslog -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span class="row-label">Syslog</span>
+              <div class="s-toggle" id="syslog-toggle"></div>
+              <input type="checkbox" id="syslog-enabled" style="display:none">
+            </div>
+            <div style="display:flex;gap:6px;">
+              <div style="flex:2;">
+                <label style="font-size:11px;color:var(--text3);">Server address</label>
+                <input type="text" id="syslog-server" class="s-input" placeholder="192.168.1.x" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Port</label>
+                <input type="text" id="syslog-port" class="s-input" placeholder="514" style="margin-top:4px;">
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <div style="flex:1">
+                <label style="font-size:11px;color:var(--text3);">Facility</label>
+                <input type="number" id="syslog-facility" class="s-input" min="0" max="23" placeholder="1" style="margin-top:4px;">
+              </div>
+              <div style="flex:1">
+                <label style="font-size:11px;color:var(--text3);">Min level</label>
+                <select id="syslog-min-level" class="s-select" style="margin-top:4px;">
+                  <option value="3">Error</option>
+                  <option value="4">Warning</option>
+                  <option value="6">Info</option>
+                  <option value="7">Debug</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <label style="font-size:11px;color:var(--text3);">Device identifier (shown in log)</label>
+              <input type="text" id="syslog-id" class="s-input" placeholder="auto-generated" maxlength="15">
+            </div>
+            <button class="s-btn primary" id="syslog-update">Save Syslog</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECURITY -->
+      <div class="settings-group">
+        <div class="settings-group-label">Security</div>
+        <div class="settings-card">
+          <!-- Controller identity -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <span class="row-label">Controller Identity</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Node Address (3 bytes hex)</label>
+                <input type="text" id="io-node-id" class="s-input" placeholder="A1B1C3" maxlength="6" style="font-family:var(--mono);text-transform:uppercase;margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">TX Power (0–20 dBm)</label>
+                <input type="number" id="io-tx-power" class="s-input" min="0" max="20" placeholder="17" style="margin-top:4px;">
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:12px;color:var(--text2);">Passive mode (listen only)</span>
+              <div class="s-toggle" id="io-passive-toggle"></div>
+              <input type="checkbox" id="io-passive-mode" style="display:none">
+            </div>
+            <button class="s-btn primary" id="io-config-save">Save Controller Settings</button>
+          </div>
+          <!-- IO key -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <span class="row-label">IO System Key</span>
+            <div class="sensitive-notice">Changing this key makes all paired devices unreachable until reboot.</div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="password" id="io-key-display" class="s-input key-display" placeholder="(not set)" readonly style="flex:1;">
+              <button class="s-btn" id="io-key-show">Show</button>
+              <button class="s-btn" id="io-key-edit">Edit</button>
+              <button class="s-btn" id="io-key-sniff">Sniff</button>
+              <button class="s-btn" id="io-key-learn">Learn</button>
+              <button class="s-btn" id="io-key-pair-device">Pair</button>
+            </div>
+            <span class="field-status" id="io-key-status"></span>
+          </div>
+          <!-- Access password -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <span class="row-label">CLI / Web Access Password</span>
+            <div style="display:flex;gap:6px;">
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">New password</label>
+                <input type="password" id="access-password-new" class="s-input" placeholder="Blank = clear password" style="margin-top:4px;">
+              </div>
+              <div style="flex:1;">
+                <label style="font-size:11px;color:var(--text3);">Confirm password</label>
+                <input type="password" id="access-password-confirm" class="s-input" placeholder="Confirm" style="margin-top:4px;">
+              </div>
+            </div>
+            <button class="s-btn primary" id="access-password-save">Set Password</button>
+          </div>
+          <!-- OTA key -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <span class="row-label">OTA Key</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="text" id="ota-key-display" class="s-input key-display" readonly style="flex:1;font-size:11px;">
+              <button class="s-btn" id="ota-key-edit">Edit</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SYSTEM -->
+      <div class="settings-group">
+        <div class="settings-group-label">System</div>
+        <div class="settings-card">
+          <!-- Firmware info -->
+          <div class="settings-row">
+            <span class="row-label">Firmware</span>
+            <div class="row-right">
+              <span class="row-value" id="firmware-version"></span>
+            </div>
+          </div>
+          <!-- OTA upload -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <span class="row-label">Firmware Update</span>
+            <div>
+              <label style="font-size:11px;color:var(--text3);">Firmware file — use <strong>heltec-vX.X.X-firmware.bin</strong> from the GitHub release, not full.bin or web.bin</label>
+              <input type="file" id="ota-file" accept=".bin" class="s-input" style="padding:5px 10px;margin-top:4px;">
+            </div>
+            <button class="s-btn primary" id="ota-upload">Upload Firmware</button>
+            <progress id="ota-progress" max="100" value="0" style="display:none;"></progress>
+            <span id="ota-status" class="field-status"></span>
+          </div>
+          <!-- Web UI upload -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <span class="row-label">Web UI Update</span>
+            <div>
+              <label style="font-size:11px;color:var(--text3);">Web UI file (.bin)</label>
+              <input type="file" id="ota-web-file" accept=".bin" class="s-input" style="padding:5px 10px;margin-top:4px;">
+            </div>
+            <button class="s-btn primary" id="ota-web-upload">Upload Web UI</button>
+            <progress id="ota-web-progress" max="100" value="0" style="display:none;"></progress>
+            <span id="ota-web-status" class="field-status"></span>
+          </div>
+          <!-- Devices backup -->
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <span class="row-label" data-i18n="section.backup">Backup / Restore</span>
+            <div>
+              <label style="font-size:11px;color:var(--text3);">Devices (.json)</label>
+              <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+                <input type="file" id="devices-file" accept=".json" class="s-input" style="flex:1;padding:5px 10px;">
+                <button class="s-btn" id="upload-devices">Upload</button>
+                <button class="s-btn" id="download-devices">Download</button>
+              </div>
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text3);">Remotes (.json)</label>
+              <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+                <input type="file" id="remotes-file" accept=".json" class="s-input" style="flex:1;padding:5px 10px;">
+                <button class="s-btn" id="upload-remotes">Upload</button>
+                <button class="s-btn" id="download-remotes">Download</button>
+              </div>
+            </div>
+          </div>
+          <!-- Reboot -->
+          <div class="settings-row">
+            <span class="row-label danger" id="reboot-btn" style="cursor:pointer;">Reboot Device</span>
+            <div class="row-right"><span class="row-chevron">›</span></div>
+          </div>
+          <!-- Update channel -->
+          <div class="settings-row">
+            <span class="row-label">Software updates</span>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-size:12px;color:var(--text2);" id="update-channel-label">Stable only</span>
+              <div class="s-toggle" id="update-channel-toggle"></div>
+              <input type="checkbox" id="update-channel-beta" style="display:none">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- REMOTES -->
+      <div class="settings-group">
+        <div class="settings-group-label" data-i18n="section.remotes">Remotes</div>
+        <div style="display:flex;justify-content:flex-end;padding:0 4px 8px;">
+          <button class="s-btn" id="remote-popup">+ Add Remote</button>
+        </div>
+        <div class="remotes-panel">
+          <table id="remote-table">
+            <thead>
+              <tr>
+                <th data-i18n="table.remote_id">ID</th>
+                <th data-i18n="table.linked_devices">Devices</th>
+                <th data-i18n="table.edit">Edit</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- hidden help buttons for JS compat -->
+      <div style="display:none;">
+        <button id="help-device"></button>
+        <button id="help-remote"></button>
+        <a id="toggle-theme"></a>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" onclick="showView('devices',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <rect x="3" y="3" width="8" height="8" rx="1.5"/>
+        <rect x="13" y="3" width="8" height="8" rx="1.5"/>
+        <rect x="3" y="13" width="8" height="8" rx="1.5"/>
+        <rect x="13" y="13" width="8" height="8" rx="1.5"/>
+      </svg>
+      <span data-i18n="nav.devices">Devices</span>
+    </button>
+    <button class="nav-btn" onclick="showView('log',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="16" y1="13" x2="8" y2="13"/>
+        <line x1="16" y1="17" x2="8" y2="17"/>
+      </svg>
+      <span data-i18n="nav.help">Log</span>
+    </button>
+    <button class="nav-btn" onclick="showView('settings',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      <span data-i18n="nav.settings">Settings</span>
+    </button>
+  </nav>
+
+</div><!-- .app -->
+
+<!-- ── DEVICE EDIT MODAL ── -->
+<div id="device-edit-modal">
+  <div class="dev-sheet">
+    <div class="dev-sheet-handle"></div>
+    <div class="dev-sheet-header">
+      <div class="dev-sheet-title">
+        <div class="dev-sheet-name" id="dev-sheet-name"></div>
+        <div class="dev-sheet-meta" id="dev-sheet-meta"></div>
+      </div>
+      <button id="device-edit-close" aria-label="Close">×</button>
+    </div>
+    <div id="dev-sheet-body"></div>
+  </div>
+</div>
+
+<!-- ── PAIR WIZARD ── -->
+<div id="pair-wizard">
+  <div class="popup-container">
+    <div class="title">
+      <h2 data-i18n="popup.pair_wizard_title">Pair Device</h2>
+      <div class="btn close" id="pair-wizard-close"></div>
+    </div>
+    <div class="card-popup">
+      <p id="pair-wizard-status"></p>
+      <div id="pair-wizard-buttons" class="popup-buttons"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── EDIT POPUP ── -->
+<div id="popup">
+  <div class="popup-container">
+    <div class="title">
+      <h2 id="popup-title">Edit</h2>
+      <div class="btn close" onclick="document.getElementById('popup').classList.remove('open')"></div>
+    </div>
+    <div class="card-popup">
+      <div id="left">
+        <p id="popup-content-left"></p>
+        <label for="popup-input" id="label-input"></label>
+        <input type="text" id="popup-input" placeholder="Type here…" autocomplete="off">
+        <label for="popup-input-timing" id="label-timing"></label>
+        <input type="text" id="popup-input-timing" placeholder="Type here…" autocomplete="off">
+        <label id="popup-boolean-row" style="display:none;gap:8px;align-items:center;">
+          <span id="popup-boolean-label">Active</span>
+          <input type="checkbox" id="popup-boolean">
+        </label>
+        <label id="popup-repeat-row" style="display:none;gap:8px;align-items:center;">
+          <span id="popup-repeat-label">Repeat command if device does not respond</span>
+          <input type="checkbox" id="popup-repeat">
+        </label>
+        <label for="popup-device-select" class="device-popup-label">Select device:</label>
+        <select id="popup-device-select" class="device-popup"></select>
+        <button id="popup-save" class="save">Save</button>
+        <p id="delete-info" style="display:none;"></p>
+        <p id="pair-label"></p>
+        <div class="popup-buttons">
+          <button id="popup-add"    class="pair">Pair</button>
+          <button id="popup-remove" class="unpair">Unpair</button>
+          <button id="popup-delete" type="button" class="danger">Delete</button>
+          <button id="popup-confirm"type="button">OK</button>
+          <button id="popup-cancel" type="button">Cancel</button>
+        </div>
+      </div>
+      <div id="right">
+        <p id="popup-content"></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── OTA KEY MODAL ── -->
+<div id="ota-key-modal" class="key-modal">
+  <div class="key-modal-inner">
+    <h3>Change OTA Key</h3>
+    <p class="key-modal-warning-label">Warning</p>
+    <p class="key-modal-warning-text">Changing the OTA key invalidates any scripts using the current key.</p>
+    <label class="key-modal-label">New OTA key:</label>
+    <input type="text" id="ota-key-new" maxlength="32" class="key-modal-input" placeholder="Enter new key">
+    <div class="key-modal-actions">
+      <button id="ota-key-cancel"  class="btn-ghost">Cancel</button>
+      <button id="ota-key-confirm" class="btn-danger-confirm">Change Key</button>
+    </div>
+    <p id="ota-key-modal-status" class="key-modal-status"></p>
+  </div>
+</div>
+
+<!-- ── IO KEY EDIT MODAL ── -->
+<div id="io-key-edit-modal" class="key-modal">
+  <div class="key-modal-inner">
+    <h3>Edit IO System Key</h3>
+    <p class="key-modal-warning-label">Warning</p>
+    <p class="key-modal-warning-text">Changing the IO key disconnects all other nodes on the bus. A reboot is required to apply.</p>
+    <label class="key-modal-label">New key (32 hex characters):</label>
+    <input type="text" id="io-key-new-input" maxlength="32" class="key-modal-input" placeholder="E8CD451E4F5D86C9A411E84B769FBFBD" autocomplete="off" style="font-family:var(--mono);text-transform:uppercase;">
+    <div class="key-modal-actions">
+      <button id="io-key-generate"    type="button" class="btn-ghost" style="margin-right:auto">Generate</button>
+      <button id="io-key-edit-cancel" type="button" class="btn-ghost">Cancel</button>
+      <button id="io-key-edit-save"   class="btn-danger-confirm">Change Key</button>
+    </div>
+    <p id="io-key-edit-status" class="key-modal-status"></p>
+  </div>
+</div>
+
+<!-- ── IO KEY SNIFF MODAL ── -->
+<div id="io-key-sniff-modal" class="key-modal">
+  <div class="key-modal-inner">
+    <h3>Sniff IO System Key</h3>
+    <p id="io-sniff-instructions" class="key-modal-warning-text">Put your Somfy controller into pairing mode with any device. The system key will be captured from radio traffic (up to 2 minutes).</p>
+    <div id="io-sniff-countdown-row" style="display:none;margin:8px 0;font-size:13px;">
+      <span>Listening… </span><strong id="io-sniff-countdown"></strong><span> s remaining</span>
+    </div>
+    <div id="io-sniff-result-row" style="display:none;margin:8px 0;">
+      <span style="color:var(--green);font-weight:600;">✓ Key captured:</span>
+      <div style="font-family:var(--mono);word-break:break-all;margin:4px 0;font-size:12px;" id="io-sniff-captured-key"></div>
+    </div>
+    <p id="io-sniff-status" class="key-modal-status"></p>
+    <div class="key-modal-actions" style="margin-top:12px;">
+      <button id="io-sniff-cancel"  type="button" class="btn-ghost">Cancel</button>
+      <button id="io-sniff-retry"   type="button" class="btn-ghost"         style="display:none;">Retry</button>
+      <button id="io-sniff-start"   class="btn-danger-confirm">Start Listening</button>
+      <button id="io-sniff-use-key" class="btn-danger-confirm" style="display:none;">Use This Key</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── KEY LEARN MODAL ── -->
+<div id="io-key-learn-modal" class="key-modal">
+  <div class="key-modal-inner">
+    <h3>Learn Key from TaHoma / Connectivity Kit</h3>
+    <p class="key-modal-warning-text">Trigger "Share" or "Add secondary controller" in the Somfy app. This device will respond as a receiver and extract the system key.</p>
+    <div id="io-learn-countdown-row" style="display:none;margin:8px 0;font-size:13px;">
+      <span>Listening… </span><strong id="io-learn-countdown"></strong><span> s remaining</span>
+    </div>
+    <div id="io-learn-result-row" style="display:none;margin:8px 0;">
+      <span style="font-size:12px;color:var(--text-secondary);">Received key:</span>
+      <div style="font-family:var(--mono);word-break:break-all;margin:4px 0;font-size:12px;" id="io-learn-captured-key"></div>
+    </div>
+    <p id="io-learn-status" class="key-modal-status"></p>
+    <div class="key-modal-actions" style="margin-top:12px;">
+      <button id="io-learn-cancel"  type="button" class="btn-ghost">Cancel</button>
+      <button id="io-learn-retry"   type="button" class="btn-ghost" style="display:none;">Retry</button>
+      <button id="io-learn-start"   class="btn-danger-confirm">Start Listening</button>
+      <button id="io-learn-use-key" class="btn-danger-confirm" style="display:none;">Use This Key</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── PAIR AS DEVICE MODAL ── -->
+<div id="io-key-pair-device-modal" class="key-modal">
+  <div class="key-modal-inner">
+    <h3>Pair as Device (receive key from TaHoma)</h3>
+    <p class="key-modal-warning-text">In the Somfy app, start "Add device" / "Add actuator" and put TaHoma into pairing mode. This device will pretend to be a new roller shutter and receive the system key during the handshake.</p>
+    <div id="io-pair-device-countdown-row" style="display:none;margin:8px 0;font-size:13px;">
+      <span>Listening for pairing broadcast… </span><strong id="io-pair-device-countdown"></strong><span> s remaining</span>
+    </div>
+    <div id="io-pair-device-result-row" style="display:none;margin:8px 0;">
+      <span style="font-size:12px;color:var(--text-secondary);">Received key:</span>
+      <div style="font-family:var(--mono);word-break:break-all;margin:4px 0;font-size:12px;" id="io-pair-device-captured-key"></div>
+    </div>
+    <p id="io-pair-device-status" class="key-modal-status"></p>
+    <div class="key-modal-actions" style="margin-top:12px;">
+      <button id="io-pair-device-cancel"  type="button" class="btn-ghost">Cancel</button>
+      <button id="io-pair-device-retry"   type="button" class="btn-ghost" style="display:none;">Retry</button>
+      <button id="io-pair-device-start"   class="btn-danger-confirm">Start Listening</button>
+      <button id="io-pair-device-use-key" class="btn-danger-confirm" style="display:none;">Use This Key</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── ADD / EDIT REMOTE WIZARD ── -->
+<div id="arm-modal" class="key-modal">
+  <div class="key-modal-inner arm-inner">
+    <h3 id="arm-modal-title">Add Remote</h3>
+
+    <!-- Step 1: choose -->
+    <div id="arm-step-choose">
+      <p class="key-modal-warning-text" style="margin-bottom:16px;">How do you want to add the remote?</p>
+      <div style="display:flex;gap:8px;">
+        <button id="arm-btn-capture" class="btn-danger-confirm" style="flex:1;">Capture</button>
+        <button id="arm-btn-manual"  class="btn-ghost"          style="flex:1;">Enter manually</button>
+        <button id="arm-btn-cancel"  class="btn-ghost"          style="flex:1;">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Step 2a: capture -->
+    <div id="arm-step-capture" style="display:none;">
+      <div class="arm-capture-row">
+        <p id="arm-capture-status" class="key-modal-warning-text">Press any button on the remote…</p>
+        <span id="arm-countdown" class="arm-countdown">30s</span>
+      </div>
+      <div class="key-modal-actions">
+        <button id="arm-skip-btn"  class="btn-ghost">Enter manually</button>
+        <button id="arm-retry-btn" class="btn-ghost" style="display:none;">Retry</button>
+      </div>
+    </div>
+
+    <!-- Step 2b: manual -->
+    <div id="arm-step-manual" style="display:none;">
+      <label class="key-modal-label">Remote ID (6 hex characters):</label>
+      <input type="text" id="arm-manual-input" maxlength="6" class="key-modal-input"
+             placeholder="A1B2C3" autocomplete="off"
+             style="font-family:var(--mono);text-transform:uppercase;letter-spacing:0.1em;">
+      <p id="arm-manual-error" class="key-modal-status" style="color:var(--red);min-height:18px;"></p>
+      <div class="key-modal-actions">
+        <button id="arm-manual-back" class="btn-ghost">Back</button>
+        <button id="arm-manual-next" class="btn-danger-confirm">Next</button>
+      </div>
+    </div>
+
+    <!-- Step 3: device selection -->
+    <div id="arm-step-devices" style="display:none;">
+      <p id="arm-remote-id-label" class="key-modal-warning-text" style="display:none;margin-bottom:10px;font-weight:600;"></p>
+      <label class="key-modal-label">Link to devices:</label>
+      <div id="arm-device-list" class="arm-device-list"></div>
+      <p id="arm-devices-error" class="key-modal-status" style="color:var(--red);min-height:18px;"></p>
+      <div class="key-modal-actions">
+        <button id="arm-delete-btn"   class="btn-ghost arm-delete-btn" style="display:none;">Delete</button>
+        <button id="arm-devices-back" class="btn-ghost">Back</button>
+        <button id="arm-save-btn"     class="btn-danger-confirm">Save</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- SCRIPTS -->
+<script src="js/utils.js"></script>
+<script src="js/popup.js"></script>
+<script src="js/devices.js"></script>
+<script src="js/remotes.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/ota.js"></script>
+<script src="js/updater.js"></script>
+<script src="js/app.js"></script>
+
+<script>
+// View switcher with scroll position memory
+var _viewScroll = {};
+function showView(id, btn) {
+    var mainEl = document.querySelector('main');
+    var current = document.querySelector('.view.active');
+    if (current) _viewScroll[current.id] = mainEl ? mainEl.scrollTop : 0;
+    document.querySelectorAll('.view').forEach(function(v){v.classList.remove('active');});
+    document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
+    document.getElementById('view-' + id).classList.add('active');
+    btn.classList.add('active');
+    if (mainEl) mainEl.scrollTop = _viewScroll['view-' + id] || 0;
+    document.dispatchEvent(new CustomEvent('viewShown', { detail: { view: id } }));
+}
+
+// Fallback AP toggle — wire visual toggle to hidden checkbox
+(function(){
+    var tog = document.getElementById('fallback-toggle');
+    var chk = document.getElementById('fallback-enabled');
+    var extra = document.getElementById('fallback-extra');
+    if (!tog || !chk) return;
+    function sync() {
+        if (chk.checked) { tog.classList.add('on'); extra.style.display=''; }
+        else { tog.classList.remove('on'); extra.style.display='none'; }
+    }
+    tog.addEventListener('click', function(){
+        chk.checked = !chk.checked;
+        sync();
+    });
+    // settings.js dispatches 'change' after loading state
+    chk.addEventListener('change', sync);
+})();
+
+// Syslog toggle
+(function(){
+    var tog = document.getElementById('syslog-toggle');
+    var chk = document.getElementById('syslog-enabled');
+    if (!tog || !chk) return;
+    function sync() {
+        if (chk.checked) tog.classList.add('on');
+        else tog.classList.remove('on');
+    }
+    tog.addEventListener('click', function(){
+        chk.checked = !chk.checked;
+        sync();
+    });
+    chk.addEventListener('change', sync);
+})();
+
+// Reboot: settings.js expects a button, but we have a span acting as button
+(function(){
+    var el = document.getElementById('reboot-btn');
+    if (!el) return;
+    // settings.js adds event listener to this element by ID, so it will work
+})();
+</script>
+
+</body>
+</html>

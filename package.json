@@ -1,0 +1,7 @@
+{
+  "name": "io-rts-web",
+  "private": true,
+  "devDependencies": {
+    "eslint": "^8.0.0"
+  }
+}

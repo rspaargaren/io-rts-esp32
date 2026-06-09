@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-js:
+    name: JS Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install ESLint
+        run: npm install
+      - name: Run ESLint
+        run: npx eslint web_data_v2/js/*.js --no-eslintrc -c .eslintrc.json
+
+  static-analysis:
+    name: C++ Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cppcheck
+        run: sudo apt-get install -y cppcheck
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --enable=warning \
+            --error-exitcode=1 \
+            --suppressions-list=.cppcheck-suppressions \
+            --inline-suppr \
+            -I main \
+            -I helpers \
+            -I components/web_server \
+            -I config \
+            main/ helpers/ components/ config/

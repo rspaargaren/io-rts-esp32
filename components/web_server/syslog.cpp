@@ -18,6 +18,7 @@ static const char *TAG = "syslog";
 static int               s_sock      = -1;
 static struct sockaddr_in s_dest     = {};
 static char              s_hostname[64] = "io-rts-esp32";
+static char              s_id[16]    = "io-rts-esp32";
 
 // Cached config — updated by syslog_apply_config() to avoid NVS reads per line.
 static bool     s_enabled   = false;
@@ -115,6 +116,12 @@ bool syslog_is_active(void)
     return s_enabled && s_sock >= 0;
 }
 
+void syslog_set_id(const char *id)
+{
+    if (id && *id)
+        snprintf(s_id, sizeof(s_id), "%s", id);
+}
+
 void syslog_send(const char *line)
 {
     int fd = s_sock;  // local copy to avoid race with syslog_apply_config
@@ -128,8 +135,8 @@ void syslog_send(const char *line)
     // Omit timestamp — let the syslog server stamp with reception time.
     // This avoids wrong timestamps when NTP hasn't synced yet.
     char buf[256];
-    int len = snprintf(buf, sizeof(buf), "<%u>%s io-rts-esp32: %s",
-                       (unsigned)pri, s_hostname, line);
+    int len = snprintf(buf, sizeof(buf), "<%u>%s %s: %s",
+                       (unsigned)pri, s_hostname, s_id, line);
     if (len <= 0) return;
     if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
 

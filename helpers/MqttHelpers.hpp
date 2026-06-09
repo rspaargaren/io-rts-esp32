@@ -34,6 +34,11 @@ namespace Helpers
         /// @param deviceId IO device ID
         void SendIoDeviceStatus(const std::string &deviceId);
 
+        /// @brief Publish an estimated (in-flight) position to MQTT, non-retained
+        /// @param deviceId IO device ID
+        /// @param position Estimated position (0-100)
+        void PublishEstimatedPosition(const std::string &deviceId, int position);
+
         const std::string &GetTopicPrefix() { return mTopicPrefix; }
 
         /// @brief Returns pointer to IoRtsManager instance
@@ -59,8 +64,17 @@ namespace Helpers
         void OnNetworkConnected();
         /// @brief Called when network link drops — cancels any pending MQTT reconnect timer
         void OnNetworkDisconnected();
+        /// @brief Called on MQTT_EVENT_CONNECTED — marks broker as reachable
+        void OnMqttConnected();
         /// @brief Called on MQTT_EVENT_DISCONNECTED — schedules reconnect if network is up
         void OnMqttDisconnected();
+
+        bool IsMqttConnected() const { return mMqttConnected; }
+
+        enum class MqttState { DISABLED, CONNECTING, CONNECTED, DISCONNECTED, ERROR };
+        MqttState GetMqttState() const { return mMqttState; }
+        const char *GetMqttStatusString() const;
+        void OnMqttError() { mMqttState = MqttState::ERROR; }
 
     private:
         /// @brief Send controller device discovery message (reboot, config, management components)
@@ -71,6 +85,8 @@ namespace Helpers
 
         IoRts::IoRtsManager *mIoRtsManager;         // Pointer to IoRtsManager object
         bool mStarted;                              // true if client is started
+        bool mMqttConnected = false;                // true while broker connection is active
+        MqttState mMqttState = MqttState::DISABLED; // current connection state for API/UI reporting
         bool mIsIoHomePassive;                      // true if IO Home is in passive mode
         std::string mTopicPrefix;                   // Topic prefix, initialized from configuration storage at boot (avoid to read it from storage everytime!)
         std::string mDiscoveryPrefix;               // Discovery prefix, initialized from configuration storage at boot (avoid to read it from storage everytime!)

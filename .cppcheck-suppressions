@@ -1,0 +1,6 @@
+// Add suppressions here as: <errorId>:<file>:<line>
+// Example: uninitvar:helpers/MqttHelpers.cpp:42
+invalidPrintfArgType_sint:helpers/CmdLineManagement.cpp:165
+nullPointerRedundantCheck:helpers/MqttHelpers.cpp:1317
+toomanyconfigs
+normalCheckLevelMaxBranches

@@ -60,4 +60,9 @@ namespace Config
         NvsHelpers::GetString(MISC_CONFIG_NAMESPACE, MISC_CONFIG_ACCESS_PWD, pass);
         return pass;
     }
+
+    const std::string MiscConfig::GetEffectiveAccessPassword()
+    {
+        return GetAccessPassword();
+    }
 }

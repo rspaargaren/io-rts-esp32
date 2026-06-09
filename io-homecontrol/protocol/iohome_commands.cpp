@@ -213,6 +213,21 @@ namespace iohome
         return true;
     }
 
+    bool create_discovery_response(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t device_type)
+    {
+        init_frame(frame, true, true, false, false);
+        set_destination(frame, dst_node_id);
+        set_source(frame, own_node_id);
+        // Data layout matches observed CMD 0x29 responses from Somfy devices:
+        // [0-1] device type/subtype
+        // [2-4] own node ID repeated in data field
+        // [5]   manufacturer (0x02 = Somfy)
+        // [6-8] padding/counter
+        static uint8_t s_counter = 0;
+        uint8_t data[9] = {device_type, 0x00, own_node_id[0], own_node_id[1], own_node_id[2], 0x02, 0xDC, 0x00, s_counter++};
+        return set_command(frame, CMD_DISCOVER_RESPONSE, data, sizeof(data));
+    }
+
     bool create_discovery_confirmation_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
     {
         // Initialize frame
@@ -223,6 +238,22 @@ namespace iohome
         set_source(frame, own_node_id);
 
         return set_command(frame, CMD_DISCOVER_CONFIRMATION);
+    }
+
+    bool create_discovery_confirmation_ack(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
+    {
+        init_frame(frame, true, true, false, false);
+        set_destination(frame, dst_node_id);
+        set_source(frame, own_node_id);
+        return set_command(frame, CMD_DISCOVER_CONFIRMATION_ACK);
+    }
+
+    bool create_key_transfer_confirmation(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
+    {
+        init_frame(frame, true, false, false, false);
+        set_destination(frame, dst_node_id);
+        set_source(frame, own_node_id);
+        return set_command(frame, CMD_KEY_TRANSFER_CONFIRMATION);
     }
 
     bool create_discovery2E_request(IoFrame &frame, const uint8_t *own_node_id)

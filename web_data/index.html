@@ -34,8 +34,8 @@
                 <section id="device-list-section">
                     <div class="title">
                         <h2 data-i18n="section.devices">Devices</h2>
-                        <div class="btn help" id="help-device"></div>
-                        <div class="btn add" id="pair-device-btn" title="Pair new device"></div>
+                        <div class="btn help" id="help-device" role="button" aria-label="Help" title="Help"></div>
+                        <div class="btn add" id="pair-device-btn" role="button" aria-label="Pair new device" title="Pair new device"></div>
                     </div>
                     <div class="card">
                         <ul id="device-list">
@@ -47,8 +47,8 @@
                 <section id="status-section">
                     <div class="title">
                         <h2 data-i18n="section.remotes">Remotes</h2>
-                        <div class="btn help" id="help-remote"></div>
-                        <div class="btn add" id="remote-popup"></div>
+                        <div class="btn help" id="help-remote" role="button" aria-label="Help" title="Help"></div>
+                        <div class="btn add" id="remote-popup" role="button" aria-label="Add remote" title="Add remote"></div>
                     </div>
                     <div class="card">
                         <table id="remote-table">
@@ -73,11 +73,14 @@
                 <section id="status-section">
                     <div class="title">
                         <h2 data-i18n="section.status_logs">Status / Log</h2>
-                        <select id="select-log">
-                            <option value="all" data-i18n="filter.all">All</option>
-                            <option value="info" data-i18n="filter.info">Info</option>
-                            <option value="off" data-i18n="filter.off">Off</option>
-                        </select>
+                        <div style="position:absolute;right:10px;top:50%;transform:translateY(-50%);display:flex;gap:6px;align-items:center;">
+                            <select id="select-log" style="margin:0;padding:4px 6px;font-size:0.8em;">
+                                <option value="all" data-i18n="filter.all">All</option>
+                                <option value="info" data-i18n="filter.info">Info</option>
+                                <option value="off" data-i18n="filter.off">Off</option>
+                            </select>
+                            <button id="clear-log" title="Clear log" aria-label="Clear log" style="padding:4px 8px;font-size:0.8em;margin:0;">✕ Clear</button>
+                        </div>
                     </div>
                     <div class="card">
                         <div id="status-messages"></div>
@@ -386,26 +389,7 @@
     <script src="js/syslog.js"></script>
     <script src="js/ota.js"></script>
     <script src="js/app.js"></script>
-    <script>
-        function showPage(page) {
-            document.getElementById('devices-page').style.display = (page === 'devices') ? 'grid' : 'none';
-            document.getElementById('settings-page').style.display = (page === 'settings') ? 'block' : 'none';
-            document.getElementById('help-page').style.display = (page === 'help') ? 'grid' : 'none';
-        }
-        (function () {
-            var tabs = document.querySelectorAll('.settings-tab');
-            var panels = document.querySelectorAll('.settings-panel');
-            tabs.forEach(function (tab) {
-                tab.addEventListener('click', function () {
-                    tabs.forEach(function (t) { t.classList.remove('active'); });
-                    panels.forEach(function (p) { p.classList.remove('active'); });
-                    tab.classList.add('active');
-                    var panel = document.getElementById('panel-' + tab.dataset.tab);
-                    if (panel) panel.classList.add('active');
-                });
-            });
-        })();
-    </script>
+    <!-- showPage(), settings tabs, and clear-log wired in app.js -->
 </body>
 
 </html>

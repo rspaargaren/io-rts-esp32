@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release:
+    name: Build & Release (Heltec)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.0.1
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -DIDF_TARGET=esp32 -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.heltec" -DAPP_VERSION="${{ github.ref_name }}" build
+
+      - name: Prepare artifacts
+        run: |
+          . $IDF_PATH/export.sh
+          TAG="${{ github.ref_name }}"
+          cp build/io-rts-esp32.bin "heltec-${TAG}-firmware.bin"
+          cp build/web.bin          "heltec-${TAG}-web.bin"
+          python -m esptool --chip esp32 merge-bin \
+            --output "heltec-${TAG}-full.bin" \
+            --target-offset 0x0 \
+            0x1000   build/bootloader/bootloader.bin \
+            0xf000   build/partition_table/partition-table.bin \
+            0x375000 build/ota_data_initial.bin \
+            0x10000  build/io-rts-esp32.bin \
+            0x3b7000 build/web.bin
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            heltec-${{ github.ref_name }}-full.bin
+            heltec-${{ github.ref_name }}-firmware.bin
+            heltec-${{ github.ref_name }}-web.bin

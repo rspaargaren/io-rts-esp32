@@ -109,6 +109,7 @@ namespace Helpers
         case MQTT_EVENT_CONNECTED:
         {
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+            mqttHelper->OnMqttConnected();
             // send birth message
             std::string topic = mqttHelper->GetTopicPrefix() + MQTT_CLIENT_BIRTH_WILL_TOPIC;
             const char *data = MQTT_CLIENT_BIRTH_MSG.c_str();
@@ -542,6 +543,7 @@ namespace Helpers
         }
         case MQTT_EVENT_ERROR:
             ESP_LOGE(TAG, "MQTT_EVENT_ERROR");
+            mqttHelper->OnMqttError();
             if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
             {
                 ESP_LOGE(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
@@ -576,23 +578,31 @@ namespace Helpers
         if (!MqttConfig::isEnabled() || mStarted)
             return ESP_ERR_NOT_ALLOWED;
         esp_err_t err = ESP_OK;
+        // Keep strings alive until esp_mqtt_client_init() consumes them
+        std::string brokerAddress = MqttConfig::GetBrokerAddress();
+        std::string clientId      = MqttConfig::GetClientId();
+        std::string username      = MqttConfig::GetClientUsername();
+        std::string password      = MqttConfig::GetClientPassword();
+        std::string lastWillTopic = MqttConfig::GetTopicPrefix() + MQTT_CLIENT_BIRTH_WILL_TOPIC;
+        std::string certificate;
         // Configure client
         esp_mqtt_client_config_t mqtt_cfg;
         memset(&mqtt_cfg, 0, sizeof(esp_mqtt_client_config_t));
-        mqtt_cfg.broker.address.hostname = MqttConfig::GetBrokerAddress().c_str();
+        mqtt_cfg.broker.address.hostname = brokerAddress.c_str();
         mqtt_cfg.broker.address.port = MqttConfig::GetBrokerPort();
         bool tls_enabled = MqttConfig::isTLSEnabled();
         mqtt_cfg.broker.address.transport = tls_enabled ? MQTT_TRANSPORT_OVER_SSL : MQTT_TRANSPORT_OVER_TCP;
         if (tls_enabled)
         {
-            mqtt_cfg.broker.verification.certificate = std::string(MQTT_CERTIFICATE_BEGIN + MqttConfig::GetBrokerCertificate() + MQTT_CERTIFICATE_END).c_str();
+            certificate = MQTT_CERTIFICATE_BEGIN + MqttConfig::GetBrokerCertificate() + MQTT_CERTIFICATE_END;
+            mqtt_cfg.broker.verification.certificate = certificate.c_str();
             mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
         }
-        mqtt_cfg.credentials.client_id = MqttConfig::GetClientId().c_str();
-        mqtt_cfg.credentials.username = MqttConfig::GetClientUsername().c_str();
-        mqtt_cfg.credentials.authentication.password = MqttConfig::GetClientPassword().c_str();
+        mqtt_cfg.credentials.client_id = clientId.c_str();
+        mqtt_cfg.credentials.username = username.c_str();
+        mqtt_cfg.credentials.authentication.password = password.c_str();
         mqtt_cfg.session.protocol_ver = MQTT_PROTOCOL_V_3_1_1;
-        mqtt_cfg.session.last_will.topic = std::string(MqttConfig::GetTopicPrefix() + MQTT_CLIENT_BIRTH_WILL_TOPIC).c_str();
+        mqtt_cfg.session.last_will.topic = lastWillTopic.c_str();
         mqtt_cfg.session.last_will.msg = MQTT_CLIENT_WILL_MSG.c_str();
         mqtt_cfg.session.last_will.msg_len = MQTT_CLIENT_WILL_MSG.length();
         mqtt_cfg.session.last_will.qos = 1;
@@ -648,6 +658,7 @@ namespace Helpers
             return ESP_FAIL;
         }
         mStarted = true;
+        mMqttState = MqttState::CONNECTING;
         return err;
     }
     void MqttHelpers::SendDiscovery()
@@ -1495,6 +1506,14 @@ namespace Helpers
         std::string topic = mTopicPrefix + "/" + MQTT_CLIENT_PREFIX_IO + deviceID + MQTT_CLIENT_SUFFIX_REMOTES + MQTT_CLIENT_STATE_TOPIC;
         esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), list.c_str(), 0, 0, 1);
     }
+    void MqttHelpers::PublishEstimatedPosition(const std::string &deviceId, int position)
+    {
+        if (!mStarted || mMqttClientHandle == nullptr) return;
+        std::string positionTopic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + deviceId + MQTT_CLIENT_POSITION_TOPIC;
+        std::string data = std::to_string(position);
+        esp_mqtt_client_publish(mMqttClientHandle, positionTopic.c_str(), data.c_str(), 0, 0, 0); // retain=0
+    }
+
     void MqttHelpers::SendLog(const std::string &log)
     {
         // Drop logs that arrive before the MQTT client is actually started: esp_mqtt_client_publish
@@ -1521,8 +1540,28 @@ namespace Helpers
         ESP_LOGI(TAG, "Network down — cancelling MQTT reconnect timer");
         esp_timer_stop(mReconnectTimer);
     }
+    const char *MqttHelpers::GetMqttStatusString() const
+    {
+        switch (mMqttState) {
+            case MqttState::CONNECTING:    return "connecting";
+            case MqttState::CONNECTED:     return "connected";
+            case MqttState::DISCONNECTED:  return "disconnected";
+            case MqttState::ERROR:         return "error";
+            default:                       return "disabled";
+        }
+    }
+
+    void MqttHelpers::OnMqttConnected()
+    {
+        mMqttConnected = true;
+        mMqttState = MqttState::CONNECTED;
+    }
+
     void MqttHelpers::OnMqttDisconnected()
     {
+        mMqttConnected = false;
+        if (mMqttState != MqttState::ERROR)
+            mMqttState = MqttState::DISCONNECTED;
         if (!mStarted || mMqttClientHandle == nullptr || mReconnectTimer == nullptr)
             return;
         if (NetworkHelpers::isConnected())

@@ -22,6 +22,9 @@ void syslog_apply_config(void);
 ///        Safe to call from any context — reads a single bool.
 bool syslog_is_active(void);
 
+/// @brief Set the syslog identifier used as the APP-NAME in messages.
+void syslog_set_id(const char *id);
+
 #ifdef __cplusplus
 }
 #endif

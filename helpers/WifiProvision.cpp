@@ -5,6 +5,7 @@
 
 #include "NetworkConfig.hpp"
 #include "NetworkHelpers.hpp"
+#include "MiscConfig.hpp"
 
 #include "esp_event.h"
 #include "esp_http_server.h"
@@ -46,10 +47,10 @@ namespace Helpers
         ap_config.ap.max_connection  = 4;
         ap_config.ap.beacon_interval = 200;
         // WPA2 requires a password of at least 8 characters
-        if (strlen(CONFIG_CMD_LINE_MANAGEMENT_DEFAULT_PWD) >= 8) {
+        std::string ap_pwd = Config::MiscConfig::GetEffectiveAccessPassword();
+        if (ap_pwd.length() >= 8) {
             ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
-            strncpy((char *)ap_config.ap.password, CONFIG_CMD_LINE_MANAGEMENT_DEFAULT_PWD,
-                    sizeof(ap_config.ap.password) - 1);
+            strncpy((char *)ap_config.ap.password, ap_pwd.c_str(), sizeof(ap_config.ap.password) - 1);
         } else {
             ap_config.ap.authmode = WIFI_AUTH_OPEN;
             ESP_LOGW(TAG, "CLI password < 8 chars — provisioning AP is OPEN (change password for WPA2)");

@@ -7,6 +7,8 @@
 #include "cJSON.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
+#include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -18,6 +20,7 @@
 #include <arpa/inet.h>
 #include <format>
 #include <list>
+#include <cmath>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -37,6 +40,7 @@
 #include "SyslogConfig.hpp"
 #include "NetworkConfig.hpp"
 #include "IoHomeConfig.hpp"
+#include "MiscConfig.hpp"
 
 #if CONFIG_WEB_ENABLED
 
@@ -224,13 +228,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-void web_server_broadcast_position(const char *device_id, int position, bool is_stopped)
+void web_server_broadcast_position(const char *device_id, int position, bool is_stopped, bool estimated)
 {
     if (!s_server) return;
-    char buf[128];
+    char buf[160];
     snprintf(buf, sizeof(buf),
-        "{\"type\":\"position\",\"id\":\"%s\",\"position\":%d,\"stopped\":%s}",
-        device_id, position, is_stopped ? "true" : "false");
+        "{\"type\":\"position\",\"id\":\"%s\",\"position\":%d,\"stopped\":%s,\"estimated\":%s}",
+        device_id, position, is_stopped ? "true" : "false", estimated ? "true" : "false");
     for (int i = 0; i < WS_MAX_CLIENTS; i++)
         if (s_ws_fds[i] != -1) ws_send_str(s_ws_fds[i], buf);
 }
@@ -398,6 +402,9 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddBoolToObject(obj, "is_inverted",   dev.info.is_openclose_inverted);
         cJSON_AddBoolToObject(obj, "tilt_supported",
             iohome::deviceTypeSupportsTilt(dev.info.device_type));
+
+        cJSON_AddNumberToObject(obj, "transit_time_ms", dev.transit_time_ms);
+
         cJSON_AddItemToArray(arr, obj);
     }
     s_manager->mIoDevicesMutex.unlock();
@@ -433,6 +440,12 @@ static esp_err_t api_remotes_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── Calibration wizard (declarations, implementation further below) ─────────
+static volatile bool s_cal_cancel = false;
+static char s_cal_device_id[8] = {};
+struct CalibrationArg { char deviceID[8]; };
+static void calibration_task(void *arg); // forward declaration
+
 // ─── POST /api/action ───────────────────────────────────────────────────────
 
 static esp_err_t api_action_post(httpd_req_t *req)
@@ -460,12 +473,37 @@ static esp_err_t api_action_post(httpd_req_t *req)
 
     if (strcmp(action, "open") == 0) {
         ok = s_manager->mIoHome->OpenDevice(deviceId);
+        if (ok) {
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceId);
+            float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
+            uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
+            s_manager->mIoDevicesMutex.unlock();
+            s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
+        }
     } else if (strcmp(action, "close") == 0) {
         ok = s_manager->mIoHome->CloseDevice(deviceId);
+        if (ok) {
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceId);
+            float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
+            uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
+            s_manager->mIoDevicesMutex.unlock();
+            s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
+        }
     } else if (strcmp(action, "stop") == 0) {
         ok = s_manager->mIoHome->StopDevice(deviceId);
+        if (ok) s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f); // poll soon after stop
     } else if (strcmp(action, "position") == 0 && value >= 0 && value <= 100) {
         ok = s_manager->mIoHome->SetDevicePosition(deviceId, (uint8_t)value);
+        if (ok) {
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceId);
+            float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
+            uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
+            s_manager->mIoDevicesMutex.unlock();
+            s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
+        }
     } else if (strcmp(action, "tilt") == 0 && value >= 0 && value <= 100) {
         ok = s_manager->mIoHome->SetDeviceTilt(deviceId, (uint8_t)value);
     } else if (strcmp(action, "identify") == 0) {
@@ -508,6 +546,22 @@ static esp_err_t api_action_post(httpd_req_t *req)
                 return ESP_OK;
             }
         }
+    } else if (strcmp(action, "setTransitTime") == 0) {
+        if (strlen(deviceId) > 0 && value >= 0) {
+            ok = s_manager->SetTransitTime(deviceId, (uint32_t)(value * 1000));
+        }
+    } else if (strcmp(action, "calibrate") == 0) {
+        if (strlen(deviceId) > 0 && s_cal_device_id[0] == '\0') {
+            auto *arg = new CalibrationArg();
+            strncpy(arg->deviceID, deviceId, sizeof(arg->deviceID) - 1);
+            arg->deviceID[sizeof(arg->deviceID) - 1] = '\0';
+            strncpy(s_cal_device_id, deviceId, sizeof(s_cal_device_id) - 1);
+            xTaskCreate(calibration_task, "calibration", 4096, arg, 5, nullptr);
+            ok = true;
+        }
+    } else if (strcmp(action, "cancelCalibration") == 0) {
+        s_cal_cancel = true;
+        ok = true;
     } else {
         cJSON_Delete(json);
         send_result(req, false, "Unknown action");
@@ -568,11 +622,17 @@ static esp_err_t api_debug_get(httpd_req_t *req)
 static esp_err_t api_mqtt_get(httpd_req_t *req)
 {
     cJSON *obj = cJSON_CreateObject();
-    cJSON_AddStringToObject(obj, "user",      Config::MqttConfig::GetClientUsername().c_str());
-    cJSON_AddStringToObject(obj, "server",    Config::MqttConfig::GetBrokerAddress().c_str());
-    cJSON_AddNumberToObject(obj, "port",      Config::MqttConfig::GetBrokerPort());
-    cJSON_AddStringToObject(obj, "password",  Config::MqttConfig::GetClientPassword().c_str());
-    cJSON_AddStringToObject(obj, "discovery", Config::MqttConfig::GetDiscoveryPrefix().c_str());
+    cJSON_AddStringToObject(obj, "user",        Config::MqttConfig::GetClientUsername().c_str());
+    cJSON_AddStringToObject(obj, "server",      Config::MqttConfig::GetBrokerAddress().c_str());
+    cJSON_AddNumberToObject(obj, "port",        Config::MqttConfig::GetBrokerPort());
+    cJSON_AddStringToObject(obj, "password",    Config::MqttConfig::GetClientPassword().c_str());
+    cJSON_AddStringToObject(obj, "client_id",   Config::MqttConfig::GetClientId().c_str());
+    cJSON_AddStringToObject(obj, "topic",       Config::MqttConfig::GetTopicPrefix().c_str());
+    cJSON_AddStringToObject(obj, "discovery",   Config::MqttConfig::GetDiscoveryPrefix().c_str());
+    cJSON_AddBoolToObject(obj, "connected",     s_manager != nullptr && s_manager->GetMqttConnected());
+    cJSON_AddBoolToObject(obj, "enabled",       Config::MqttConfig::isEnabled());
+    const char *mqtt_status = s_manager != nullptr ? s_manager->GetMqttStatusString() : "disabled";
+    cJSON_AddStringToObject(obj, "status",      mqtt_status);
     send_json(req, obj);
     return ESP_OK;
 }
@@ -599,12 +659,16 @@ static esp_err_t api_mqtt_post(httpd_req_t *req)
     std::string user      = get_str("user");
     std::string server    = get_str("server");
     std::string password  = get_str("password");
+    std::string client_id = get_str("client_id");
+    std::string topic     = get_str("topic");
     std::string discovery = get_str("discovery");
     cJSON *jPort = cJSON_GetObjectItem(json, "port");
 
     if (!user.empty())      Config::MqttConfig::SetClientUsername(user);
     if (!server.empty())    Config::MqttConfig::SetBrokerAddress(server);
     if (!password.empty())  Config::MqttConfig::SetClientPassword(password);
+    if (!client_id.empty()) Config::MqttConfig::SetClientId(client_id);
+    if (!topic.empty())     Config::MqttConfig::SetTopicPrefix(topic);
     if (!discovery.empty()) Config::MqttConfig::SetDiscoveryPrefix(discovery);
     if (cJSON_IsNumber(jPort))
         Config::MqttConfig::SetBrokerPort((uint16_t)jPort->valuedouble);
@@ -612,10 +676,43 @@ static esp_err_t api_mqtt_post(httpd_req_t *req)
         int p = atoi(jPort->valuestring);
         if (p > 0) Config::MqttConfig::SetBrokerPort((uint16_t)p);
     }
+    cJSON *jEnabled = cJSON_GetObjectItem(json, "enabled");
+    if (cJSON_IsBool(jEnabled)) {
+        Config::MqttConfig::Activate(cJSON_IsTrue(jEnabled));
+        if (cJSON_IsTrue(jEnabled) && s_manager != nullptr)
+            s_manager->TriggerMqttStart();
+    }
 
     cJSON_Delete(json);
-    send_result(req, true, "MQTT config saved. Reboot to apply.");
+    send_result(req, true, "MQTT config saved.");
     return ESP_OK;
+}
+
+// ─── Syslog identifier management ───────────────────────────────────────────
+
+#define SYSLOG_ID_LEN 8
+static char s_syslog_id[SYSLOG_ID_LEN + 1] = {};
+
+static void syslog_id_init(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("syslog", NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGE(TAG, "syslog_id: failed to open NVS");
+        return;
+    }
+    size_t len = sizeof(s_syslog_id);
+    esp_err_t err = nvs_get_str(h, "id", s_syslog_id, &len);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        uint32_t r = esp_random();
+        snprintf(s_syslog_id, sizeof(s_syslog_id), "%08" PRIx32, r);
+        nvs_set_str(h, "id", s_syslog_id);
+        nvs_commit(h);
+        ESP_LOGI(TAG, "syslog id (generated): %s", s_syslog_id);
+    } else if (err == ESP_OK) {
+        ESP_LOGI(TAG, "syslog id (loaded): %s", s_syslog_id);
+    }
+    nvs_close(h);
+    syslog_set_id(s_syslog_id);
 }
 
 // ─── OTA key management ─────────────────────────────────────────────────────
@@ -915,6 +1012,17 @@ static esp_err_t api_ota_post(httpd_req_t *req)
             write_err = true;
             break;
         }
+        // Check magic byte of first chunk — 0xE9 is the ESP app image magic.
+        // full.bin starts with 0xFF padding and must not be used for OTA.
+        if (total == 0 && n > 0 && (uint8_t)buf[0] != 0xE9) {
+            ESP_LOGE(TAG, "OTA: bad magic 0x%02x — use firmware.bin, not full.bin", (uint8_t)buf[0]);
+            esp_ota_abort(ota_handle);
+            // drain remaining body so HTTP connection stays clean
+            char drain[256];
+            while (remaining > n) { remaining -= n; n = httpd_req_recv(req, drain, sizeof(drain)); if (n <= 0) break; }
+            send_result(req, false, "Wrong file — use the -firmware.bin file, not -full.bin or -web.bin");
+            return ESP_OK;
+        }
         err = esp_ota_write(ota_handle, buf, n);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
@@ -934,7 +1042,7 @@ static esp_err_t api_ota_post(httpd_req_t *req)
     err = esp_ota_end(ota_handle);
     ESP_LOGI(TAG, "esp_ota_end: %s (%d bytes written)", esp_err_to_name(err), total);
     if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA verify failed");
+        send_result(req, false, "OTA verify failed — use the -firmware.bin file from the GitHub release, not -full.bin or -web.bin");
         return ESP_OK;
     }
 
@@ -953,6 +1061,214 @@ static esp_err_t api_ota_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── POST /api/ota/web ──────────────────────────────────────────────────────
+
+static esp_err_t api_ota_web_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+
+    if (req->content_len == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty payload");
+        return ESP_OK;
+    }
+
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "web");
+    if (!part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Web partition not found");
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "OTA web: writing %d bytes to partition '%s'", (int)req->content_len, part->label);
+
+    esp_err_t err = esp_partition_erase_range(part, 0, part->size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA web: erase failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Erase failed");
+        return ESP_OK;
+    }
+
+    char buf[1024];
+    int total = 0;
+    int remaining = (int)req->content_len;
+    bool write_err = false;
+
+    while (remaining > 0) {
+        int to_recv = (remaining < (int)sizeof(buf)) ? remaining : (int)sizeof(buf);
+        int n = httpd_req_recv(req, buf, to_recv);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) {
+            ESP_LOGE(TAG, "OTA web: receive error at byte %d", total);
+            write_err = true;
+            break;
+        }
+        err = esp_partition_write(part, total, buf, n);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "OTA web: write failed at offset %d: %s", total, esp_err_to_name(err));
+            write_err = true;
+            break;
+        }
+        total += n;
+        remaining -= n;
+    }
+
+    if (write_err) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "OTA web: success (%d bytes), rebooting...", total);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
+// ─── POST /api/ota/url ──────────────────────────────────────────────────────
+// Device downloads firmware or web image directly from a URL (avoids browser CORS
+// restrictions when fetching GitHub release assets cross-origin).
+
+static esp_err_t api_ota_url_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
+
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) {
+        send_result(req, false, "Failed to read body");
+        return ESP_OK;
+    }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jUrl  = cJSON_GetObjectItem(json, "url");
+    cJSON *jType = cJSON_GetObjectItem(json, "type");
+    bool is_web  = cJSON_IsString(jType) && strcmp(jType->valuestring, "web") == 0;
+
+    if (!cJSON_IsString(jUrl) || !jUrl->valuestring[0]) {
+        cJSON_Delete(json);
+        send_result(req, false, "Missing url");
+        return ESP_OK;
+    }
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s", jUrl->valuestring);
+    cJSON_Delete(json);
+
+    ESP_LOGI(TAG, "OTA URL: fetching %s (type=%s)", url, is_web ? "web" : "firmware");
+
+    esp_http_client_config_t http_cfg = {};
+    http_cfg.url = url;
+    http_cfg.max_redirection_count = 5;
+    http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    http_cfg.timeout_ms = 30000;
+    http_cfg.buffer_size = 4096;     // CDN redirect headers are large; default 512 causes "Out of buffer"
+    http_cfg.buffer_size_tx = 1024;
+
+    esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    if (!client) { send_result(req, false, "HTTP client init failed"); return ESP_OK; }
+
+    // Manual redirect loop — esp_http_client only auto-follows redirects via perform(),
+    // not via the open/fetch_headers/read streaming API.
+    int http_status = 0;
+    for (int redir = 0; redir <= 5; redir++) {
+        if (esp_http_client_open(client, 0) != ESP_OK) {
+            esp_http_client_cleanup(client);
+            send_result(req, false, "HTTP connect failed");
+            return ESP_OK;
+        }
+        if (esp_http_client_fetch_headers(client) < 0) {
+            esp_http_client_close(client); esp_http_client_cleanup(client);
+            send_result(req, false, "HTTP fetch headers failed");
+            return ESP_OK;
+        }
+        http_status = esp_http_client_get_status_code(client);
+        if (http_status >= 200 && http_status < 300) break; // final response
+        if (http_status >= 300 && http_status < 400) {
+            esp_http_client_set_redirection(client);
+            esp_http_client_close(client);
+            continue;
+        }
+        // non-redirect error
+        esp_http_client_close(client); esp_http_client_cleanup(client);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Download failed: HTTP %d", http_status);
+        send_result(req, false, msg);
+        return ESP_OK;
+    }
+    if (http_status < 200 || http_status >= 300) {
+        esp_http_client_close(client); esp_http_client_cleanup(client);
+        send_result(req, false, "Too many redirects");
+        return ESP_OK;
+    }
+
+    // Prepare OTA destination
+    esp_ota_handle_t ota_handle = 0;
+    const esp_partition_t *ota_part = nullptr;
+    const esp_partition_t *web_part = nullptr;
+    esp_err_t err;
+
+    if (!is_web) {
+        ota_part = esp_ota_get_next_update_partition(NULL);
+        if (!ota_part || (err = esp_ota_begin(ota_part, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle)) != ESP_OK) {
+            esp_http_client_close(client); esp_http_client_cleanup(client);
+            send_result(req, false, "OTA begin failed"); return ESP_OK;
+        }
+    } else {
+        web_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "web");
+        if (!web_part || (err = esp_partition_erase_range(web_part, 0, web_part->size)) != ESP_OK) {
+            esp_http_client_close(client); esp_http_client_cleanup(client);
+            send_result(req, false, "Web partition error"); return ESP_OK;
+        }
+    }
+
+    char buf[1024];
+    int total = 0;
+    bool write_err = false;
+
+    while (true) {
+        int n = esp_http_client_read(client, buf, sizeof(buf));
+        if (n < 0) { write_err = true; break; }
+        if (n == 0) break;
+        err = is_web ? esp_partition_write(web_part, total, buf, n)
+                     : esp_ota_write(ota_handle, buf, n);
+        if (err != ESP_OK) { write_err = true; break; }
+        total += n;
+    }
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    if (write_err) {
+        if (!is_web) esp_ota_abort(ota_handle);
+        ESP_LOGE(TAG, "OTA URL: write error after %d bytes", total);
+        send_result(req, false, "Download/write failed");
+        return ESP_OK;
+    }
+
+    if (!is_web) {
+        if (esp_ota_end(ota_handle) != ESP_OK ||
+            esp_ota_set_boot_partition(ota_part) != ESP_OK) {
+            send_result(req, false, "OTA verify/set boot failed");
+            return ESP_OK;
+        }
+    }
+
+    ESP_LOGI(TAG, "OTA URL: done (%d bytes), rebooting...", total);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    esp_restart();
+    return ESP_OK;
+}
+
 // ─── GET /api/syslog ────────────────────────────────────────────────────────
 
 static esp_err_t api_syslog_get(httpd_req_t *req)
@@ -963,6 +1279,7 @@ static esp_err_t api_syslog_get(httpd_req_t *req)
     cJSON_AddNumberToObject(obj, "port",      Config::SyslogConfig::GetPort());
     cJSON_AddNumberToObject(obj, "facility",  Config::SyslogConfig::GetFacility());
     cJSON_AddNumberToObject(obj, "min_level", Config::SyslogConfig::GetMinLevel());
+    cJSON_AddStringToObject(obj, "id",        s_syslog_id);
     send_json(req, obj);
     return ESP_OK;
 }
@@ -986,12 +1303,23 @@ static esp_err_t api_syslog_post(httpd_req_t *req)
     cJSON *jPort     = cJSON_GetObjectItem(json, "port");
     cJSON *jFacility = cJSON_GetObjectItem(json, "facility");
     cJSON *jMinLevel = cJSON_GetObjectItem(json, "min_level");
+    cJSON *jId       = cJSON_GetObjectItem(json, "id");
 
     if (cJSON_IsBool(jEnabled))   Config::SyslogConfig::SetEnabled(cJSON_IsTrue(jEnabled));
     if (cJSON_IsString(jServer))  Config::SyslogConfig::SetServer(jServer->valuestring);
     if (cJSON_IsNumber(jPort))    Config::SyslogConfig::SetPort((uint16_t)jPort->valuedouble);
     if (cJSON_IsNumber(jFacility)) Config::SyslogConfig::SetFacility((uint8_t)jFacility->valuedouble);
     if (cJSON_IsNumber(jMinLevel)) Config::SyslogConfig::SetMinLevel((uint8_t)jMinLevel->valuedouble);
+    if (cJSON_IsString(jId) && jId->valuestring[0]) {
+        snprintf(s_syslog_id, sizeof(s_syslog_id), "%s", jId->valuestring);
+        nvs_handle_t h;
+        if (nvs_open("syslog", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_str(h, "id", s_syslog_id);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+        syslog_set_id(s_syslog_id);
+    }
 
     cJSON_Delete(json);
     syslog_apply_config();
@@ -1095,6 +1423,162 @@ static esp_err_t api_io_sniff_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── GET /api/io/config ─────────────────────────────────────────────────────
+
+static esp_err_t api_io_config_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "node_id",      Config::IoHomeConfig::GetIoNodeId().c_str());
+    cJSON_AddNumberToObject(obj, "tx_power",     Config::IoHomeConfig::GetTxPower());
+    cJSON_AddBoolToObject(obj,   "passive_mode", Config::IoHomeConfig::isPassiveModeEnabled());
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/io/config ────────────────────────────────────────────────────
+
+static esp_err_t api_io_config_post(httpd_req_t *req)
+{
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jNodeId = cJSON_GetObjectItem(json, "node_id");
+    if (cJSON_IsString(jNodeId)) {
+        std::string id = jNodeId->valuestring;
+        if (id.length() != 6) {
+            cJSON_Delete(json);
+            send_result(req, false, "node_id must be exactly 6 hex characters");
+            return ESP_OK;
+        }
+        Config::IoHomeConfig::SetIoNodeId(id);
+    }
+
+    cJSON *jTx = cJSON_GetObjectItem(json, "tx_power");
+    if (cJSON_IsNumber(jTx)) {
+        int p = (int)jTx->valuedouble;
+        if (p < 0 || p > 20) {
+            cJSON_Delete(json);
+            send_result(req, false, "tx_power must be 0-20");
+            return ESP_OK;
+        }
+        Config::IoHomeConfig::SetTxPower((uint8_t)p);
+    }
+
+    cJSON *jPassive = cJSON_GetObjectItem(json, "passive_mode");
+    if (cJSON_IsBool(jPassive))
+        Config::IoHomeConfig::ActivatePassiveMode(cJSON_IsTrue(jPassive));
+
+    cJSON_Delete(json);
+    send_result(req, true, "IO config saved — reboot to apply");
+    return ESP_OK;
+}
+
+// ─── POST /api/misc/password ────────────────────────────────────────────────
+
+static esp_err_t api_misc_password_post(httpd_req_t *req)
+{
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *jPwd = cJSON_GetObjectItem(json, "password");
+    if (!cJSON_IsString(jPwd)) {
+        cJSON_Delete(json);
+        send_result(req, false, "Missing 'password'");
+        return ESP_OK;
+    }
+
+    std::string pwd = jPwd->valuestring;
+    if (!pwd.empty() && pwd.length() < 8) {
+        cJSON_Delete(json);
+        send_result(req, false, "Password must be at least 8 characters");
+        return ESP_OK;
+    }
+    if (pwd.length() > Config::PASSWORD_MAXSIZE) {
+        cJSON_Delete(json);
+        send_result(req, false, "Password too long (max 32 characters)");
+        return ESP_OK;
+    }
+
+    esp_err_t err;
+    if (pwd.empty()) {
+        Config::MiscConfig::ResetAccessPassword();
+        err = ESP_OK;
+    } else {
+        err = Config::MiscConfig::SetAccessPassword(pwd);
+    }
+
+    cJSON_Delete(json);
+    if (err != ESP_OK) { send_result(req, false, "Failed to save password"); return ESP_OK; }
+    send_result(req, true, pwd.empty() ? "Password cleared — reboot to apply" : "Password saved — reboot to apply");
+    return ESP_OK;
+}
+
+// ─── GET /api/network/config ────────────────────────────────────────────────
+
+static esp_err_t api_network_config_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "hostname", Config::NetworkConfig::GetHostname().c_str());
+    cJSON_AddBoolToObject(obj,   "dhcp",     Config::NetworkConfig::isDHCP());
+    cJSON_AddStringToObject(obj, "ip",       Config::NetworkConfig::GetIpAddress().c_str());
+    cJSON_AddStringToObject(obj, "mask",     Config::NetworkConfig::GetNetworkMask().c_str());
+    cJSON_AddStringToObject(obj, "gateway",  Config::NetworkConfig::GetGatewayAddress().c_str());
+    cJSON_AddStringToObject(obj, "dns1",     Config::NetworkConfig::GetMainDNSAddress().c_str());
+    cJSON_AddStringToObject(obj, "dns2",     Config::NetworkConfig::GetBackupDNSAddress().c_str());
+    cJSON_AddStringToObject(obj, "sntp",     Config::NetworkConfig::GetSNTPAddress().c_str());
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/network/config ───────────────────────────────────────────────
+
+static esp_err_t api_network_config_post(httpd_req_t *req)
+{
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    auto get_str = [&](const char *key) -> std::string {
+        cJSON *item = cJSON_GetObjectItem(json, key);
+        return cJSON_IsString(item) ? std::string(item->valuestring) : "";
+    };
+
+    std::string hostname = get_str("hostname");
+    if (!hostname.empty()) Config::NetworkConfig::SetHostname(hostname);
+
+    cJSON *jDhcp = cJSON_GetObjectItem(json, "dhcp");
+    if (cJSON_IsBool(jDhcp)) Config::NetworkConfig::SetDHCP(cJSON_IsTrue(jDhcp));
+
+    std::string ip      = get_str("ip");
+    std::string mask    = get_str("mask");
+    std::string gateway = get_str("gateway");
+    std::string dns1    = get_str("dns1");
+    std::string dns2    = get_str("dns2");
+    std::string sntp    = get_str("sntp");
+
+    if (!ip.empty())      Config::NetworkConfig::SetIpAddress(ip);
+    if (!mask.empty())    Config::NetworkConfig::SetNetworkMask(mask);
+    if (!gateway.empty()) Config::NetworkConfig::SetGatewayAddress(gateway);
+    if (!dns1.empty())    Config::NetworkConfig::SetMainDNSAddress(dns1);
+    if (!dns2.empty())    Config::NetworkConfig::SetBackupDNSAddress(dns2);
+    if (!sntp.empty())    Config::NetworkConfig::SetSNTPAddress(sntp);
+
+    cJSON_Delete(json);
+    send_result(req, true, "Network config saved — reboot to apply");
+    return ESP_OK;
+}
+
 // ─── Download / Upload helpers ──────────────────────────────────────────────
 
 static esp_err_t read_multipart_content(httpd_req_t *req, char **out)
@@ -1178,6 +1662,21 @@ static bool json_to_stored_device(cJSON *item, std::string &deviceID, Helpers::S
         std::string hex(nodeIdItem->valuestring);
         for (int i = 0; i < iohome::NODE_ID_SIZE && (i * 2 + 1) < (int)hex.length(); i++)
             dev.info.node_id[i] = (uint8_t)strtol(hex.substr(i * 2, 2).c_str(), nullptr, 16);
+    }
+    // If node_id is missing or zero, default to the device's own id
+    bool nodeIdZero = true;
+    for (int i = 0; i < iohome::NODE_ID_SIZE; i++) if (dev.info.node_id[i]) { nodeIdZero = false; break; }
+    if (nodeIdZero)
+        for (int i = 0; i < iohome::NODE_ID_SIZE && (i * 2 + 1) < (int)deviceID.length(); i++)
+            dev.info.node_id[i] = (uint8_t)strtol(deviceID.substr(i * 2, 2).c_str(), nullptr, 16);
+    // Reject if node_id matches own controller address
+    std::string ownNodeId = Config::IoHomeConfig::GetIoNodeId();
+    std::string nodeIdHex;
+    for (int i = 0; i < iohome::NODE_ID_SIZE; i++)
+        nodeIdHex += std::format("{:02X}", dev.info.node_id[i]);
+    if (nodeIdHex == ownNodeId) {
+        ESP_LOGE(TAG, "json_to_stored_device: device %s has node_id equal to own node ID — rejected!", deviceID.c_str());
+        return false;
     }
 
     cJSON *typeItem = cJSON_GetObjectItem(item, "device_type");
@@ -1355,6 +1854,18 @@ static esp_err_t api_info_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t api_info_fs_get(httpd_req_t *req)
+{
+    size_t total = 0, used = 0;
+    esp_littlefs_info("web", &total, &used);
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(obj, "total", (double)total);
+    cJSON_AddNumberToObject(obj, "used",  (double)used);
+    cJSON_AddNumberToObject(obj, "free",  (double)(total - used));
+    send_json(req, obj);
+    return ESP_OK;
+}
+
 // ─── POST /api/upload/web ───────────────────────────────────────────────────
 
 static esp_err_t api_upload_web_post(httpd_req_t *req)
@@ -1469,6 +1980,128 @@ static esp_err_t api_pair_status_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── Key learn (device-side receiver of TaHoma/CK key share) ────────────────
+
+static bool s_learn_active = false;
+
+static void learn_task(void *)
+{
+    ESP_LOGI(TAG, "Key learn task started — waiting for controller");
+    const int MAX_ATTEMPTS = 60; // 60 × ~2 s ≈ 120 s window
+    std::string key;
+    for (int attempt = 0; attempt < MAX_ATTEMPTS && s_learn_active; attempt++)
+    {
+        key = s_manager->mIoHome->LearnKeyFromController();
+        if (!key.empty()) break;
+        if ((attempt % 5) == 4) {
+            int remaining_s = (MAX_ATTEMPTS - attempt - 1) * 2;
+            char buf[72];
+            snprintf(buf, sizeof(buf), "{\"type\":\"learn_active\",\"remaining_s\":%d}", remaining_s);
+            web_server_broadcast_message(buf);
+        }
+    }
+    s_learn_active = false;
+    if (key.empty()) {
+        ESP_LOGW(TAG, "Key learn timed out");
+        web_server_broadcast_message("{\"type\":\"learn_failed\"}");
+    } else {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "{\"type\":\"learn_key\",\"key\":\"%s\"}", key.c_str());
+        web_server_broadcast_message(buf);
+    }
+    vTaskDelete(nullptr);
+}
+
+static esp_err_t api_learn_start_post(httpd_req_t *req)
+{
+    if (s_learn_active) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"busy\"}");
+        return ESP_OK;
+    }
+    s_learn_active = true;
+    xTaskCreate(learn_task, "learn_task", 4096, nullptr, 5, nullptr);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"started\"}");
+    return ESP_OK;
+}
+
+static esp_err_t api_learn_stop_post(httpd_req_t *req)
+{
+    s_learn_active = false;
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"stopped\"}");
+    return ESP_OK;
+}
+
+static esp_err_t api_learn_status_get(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, s_learn_active ? "{\"active\":true}" : "{\"active\":false}");
+    return ESP_OK;
+}
+
+// ─── Pair as device (pretend to be a new actuator so TaHoma submits the key) ─
+
+static bool s_pair_device_active = false;
+
+static void pair_device_task(void *)
+{
+    ESP_LOGI(TAG, "Pair-as-device task started — waiting for TaHoma broadcast CMD 28");
+    const int MAX_ATTEMPTS = 60; // 60 × ~2 s ≈ 120 s window
+    std::string key;
+    for (int attempt = 0; attempt < MAX_ATTEMPTS && s_pair_device_active; attempt++)
+    {
+        key = s_manager->mIoHome->PairAsDevice();
+        if (!key.empty()) break;
+        if ((attempt % 5) == 4) {
+            int remaining_s = (MAX_ATTEMPTS - attempt - 1) * 2;
+            char buf[80];
+            snprintf(buf, sizeof(buf), "{\"type\":\"pair_device_active\",\"remaining_s\":%d}", remaining_s);
+            web_server_broadcast_message(buf);
+        }
+    }
+    s_pair_device_active = false;
+    if (key.empty()) {
+        ESP_LOGW(TAG, "Pair-as-device timed out");
+        web_server_broadcast_message("{\"type\":\"pair_device_failed\"}");
+    } else {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "{\"type\":\"pair_device_key\",\"key\":\"%s\"}", key.c_str());
+        web_server_broadcast_message(buf);
+    }
+    vTaskDelete(nullptr);
+}
+
+static esp_err_t api_pair_device_start_post(httpd_req_t *req)
+{
+    if (s_pair_device_active) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"busy\"}");
+        return ESP_OK;
+    }
+    s_pair_device_active = true;
+    xTaskCreate(pair_device_task, "pair_dev_task", 4096, nullptr, 5, nullptr);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"started\"}");
+    return ESP_OK;
+}
+
+static esp_err_t api_pair_device_stop_post(httpd_req_t *req)
+{
+    s_pair_device_active = false;
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"stopped\"}");
+    return ESP_OK;
+}
+
+static esp_err_t api_pair_device_status_get(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, s_pair_device_active ? "{\"active\":true}" : "{\"active\":false}");
+    return ESP_OK;
+}
+
 // ─── Remote capture ─────────────────────────────────────────────────────────
 
 #define REMOTE_CAPTURE_TIMEOUT_MS 30000
@@ -1512,6 +2145,125 @@ static esp_err_t api_capture_cancel_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── Calibration wizard (implementation) ────────────────────────────────────
+
+static void calibration_broadcast(const char *id, int step, const char *msg, int position)
+{
+    char buf[200];
+    snprintf(buf, sizeof(buf),
+        "{\"type\":\"calibration_progress\",\"id\":\"%s\",\"step\":%d,\"message\":\"%s\",\"position\":%d}",
+        id, step, msg, position);
+    web_server_broadcast_message(buf);
+}
+
+static bool wait_for_stopped(const char *deviceID, int step, const char *msg, float target_approx, int timeout_s)
+{
+    for (int elapsed = 0; elapsed < timeout_s * 2; elapsed++) // poll every 500ms
+    {
+        if (s_cal_cancel) return false;
+
+        // Poll device status
+        if (s_manager && s_manager->mIoHome)
+            s_manager->mIoHome->ForceDeviceStatusUpdate(deviceID);
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+
+        if (s_manager)
+        {
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceID);
+            bool stopped = (it != s_manager->mIoDevices.end()) && it->second.is_stopped;
+            int pos = (it != s_manager->mIoDevices.end() && it->second.position != iohome::UNKNOWN_POSITION)
+                      ? (int)it->second.position : -1;
+            s_manager->mIoDevicesMutex.unlock();
+
+            if (pos >= 0)
+                calibration_broadcast(deviceID, step, msg, pos);
+
+            if (stopped)
+                return true;
+        }
+    }
+    return false; // timeout
+}
+
+static void calibration_task(void *arg)
+{
+    auto *a = static_cast<CalibrationArg *>(arg);
+    const char *id = a->deviceID;
+    s_cal_cancel = false;
+
+    int64_t t0, t1, t2, t3;
+    uint32_t transit_close_ms = 0, transit_open_ms = 0;
+
+    // Step 1: Move to open position
+    calibration_broadcast(id, 1, "Moving to open position\xe2\x80\xa6", -1);
+    if (s_manager && s_manager->mIoHome)
+        s_manager->mIoHome->OpenDevice(id);
+    if (!wait_for_stopped(id, 1, "Moving to open position\xe2\x80\xa6", 0, 120)) {
+        char buf[150];
+        snprintf(buf, sizeof(buf), "{\"type\":\"calibration_failed\",\"id\":\"%s\",\"reason\":\"%s\"}", id,
+            s_cal_cancel ? "cancelled" : "timeout");
+        web_server_broadcast_message(buf);
+        goto done;
+    }
+
+    // Step 2: Measure close travel
+    calibration_broadcast(id, 2, "Measuring close travel\xe2\x80\xa6", 0);
+    t0 = esp_timer_get_time();
+    if (s_manager && s_manager->mIoHome)
+        s_manager->mIoHome->CloseDevice(id);
+    if (!wait_for_stopped(id, 2, "Measuring close travel\xe2\x80\xa6", 100, 120)) {
+        // Save partial if we got at least some travel
+        char buf[150];
+        snprintf(buf, sizeof(buf), "{\"type\":\"calibration_failed\",\"id\":\"%s\",\"reason\":\"%s\"}", id,
+            s_cal_cancel ? "cancelled" : "timeout");
+        web_server_broadcast_message(buf);
+        goto done;
+    }
+    t1 = esp_timer_get_time();
+    transit_close_ms = (uint32_t)((t1 - t0) / 1000);
+
+    if (s_cal_cancel) {
+        // Save single-direction provisional value
+        if (s_manager) s_manager->SetTransitTime(id, transit_close_ms);
+        char buf[150];
+        snprintf(buf, sizeof(buf), "{\"type\":\"calibration_failed\",\"id\":\"%s\",\"reason\":\"cancelled\"}", id);
+        web_server_broadcast_message(buf);
+        goto done;
+    }
+
+    // Step 3: Measure open travel
+    calibration_broadcast(id, 3, "Measuring open travel\xe2\x80\xa6", 100);
+    t2 = esp_timer_get_time();
+    if (s_manager && s_manager->mIoHome)
+        s_manager->mIoHome->OpenDevice(id);
+    if (!wait_for_stopped(id, 3, "Measuring open travel\xe2\x80\xa6", 0, 120)) {
+        char buf[150];
+        snprintf(buf, sizeof(buf), "{\"type\":\"calibration_failed\",\"id\":\"%s\",\"reason\":\"%s\"}", id,
+            s_cal_cancel ? "cancelled" : "timeout");
+        web_server_broadcast_message(buf);
+        goto done;
+    }
+    t3 = esp_timer_get_time();
+    transit_open_ms = (uint32_t)((t3 - t2) / 1000);
+
+    {
+        uint32_t avg_ms = (transit_close_ms + transit_open_ms) / 2;
+        if (s_manager) s_manager->SetTransitTime(id, avg_ms);
+        char buf[150];
+        snprintf(buf, sizeof(buf),
+            "{\"type\":\"calibration_done\",\"id\":\"%s\",\"transit_time_ms\":%" PRIu32 "}", id, avg_ms);
+        web_server_broadcast_message(buf);
+        ESP_LOGI(TAG, "Calibration done for %s: close=%" PRIu32 "ms open=%" PRIu32 "ms avg=%" PRIu32 "ms", id, transit_close_ms, transit_open_ms, avg_ms);
+    }
+
+done:
+    s_cal_device_id[0] = '\0';
+    delete a;
+    vTaskDelete(nullptr);
+}
+
 // ─── Server startup ─────────────────────────────────────────────────────────
 
 void web_server_start(void *ioRtsManager)
@@ -1536,7 +2288,7 @@ void web_server_start(void *ioRtsManager)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     config.task_priority = tskIDLE_PRIORITY + 3; // below radio (8), IO processing (6), status updates (4)
-    config.max_uri_handlers = 40;
+    config.max_uri_handlers = 48;
     config.max_open_sockets = 13; // browser opens many parallel connections for static files + WS
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.enable_so_linger = false;
@@ -1580,6 +2332,8 @@ void web_server_start(void *ioRtsManager)
     reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
     reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
     reg("/api/ota",               HTTP_POST, api_ota_post);
+    reg("/api/ota/url",           HTTP_POST, api_ota_url_post);
+    reg("/api/ota/web",           HTTP_POST, api_ota_web_post);
     reg("/api/ota/key",           HTTP_GET,  api_ota_key_get);
     reg("/api/ota/key",           HTTP_POST, api_ota_key_post);
     reg("/api/reboot",            HTTP_POST, api_reboot_post);
@@ -1587,6 +2341,11 @@ void web_server_start(void *ioRtsManager)
     reg("/api/io/key",            HTTP_POST, api_io_key_post);
     reg("/api/io/sniff",          HTTP_GET,  api_io_sniff_get);
     reg("/api/io/sniff",          HTTP_POST, api_io_sniff_post);
+    reg("/api/io/config",         HTTP_GET,  api_io_config_get);
+    reg("/api/io/config",         HTTP_POST, api_io_config_post);
+    reg("/api/misc/password",     HTTP_POST, api_misc_password_post);
+    reg("/api/network/config",    HTTP_GET,  api_network_config_get);
+    reg("/api/network/config",    HTTP_POST, api_network_config_post);
     reg("/api/wifi/config",       HTTP_GET,  api_wifi_config_get);
     reg("/api/wifi/config",       HTTP_POST, api_wifi_config_post);
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
@@ -1595,9 +2354,16 @@ void web_server_start(void *ioRtsManager)
     reg("/api/wifi/scan",         HTTP_GET,  api_wifi_scan_get);
 #endif
     reg("/api/info",              HTTP_GET,  api_info_get);
+    reg("/api/info/fs",           HTTP_GET,  api_info_fs_get);
     reg("/api/upload/web*",       HTTP_POST, api_upload_web_post);
     reg("/api/pair/start",        HTTP_POST, api_pair_start_post);
     reg("/api/pair/status",       HTTP_GET,  api_pair_status_get);
+    reg("/api/learn/start",              HTTP_POST, api_learn_start_post);
+    reg("/api/learn/stop",               HTTP_POST, api_learn_stop_post);
+    reg("/api/learn/status",             HTTP_GET,  api_learn_status_get);
+    reg("/api/pair-device/start",        HTTP_POST, api_pair_device_start_post);
+    reg("/api/pair-device/stop",         HTTP_POST, api_pair_device_stop_post);
+    reg("/api/pair-device/status",       HTTP_GET,  api_pair_device_status_get);
     reg("/api/remote/capture/start",  HTTP_POST, api_capture_start_post);
     reg("/api/remote/capture/cancel", HTTP_POST, api_capture_cancel_post);
 
@@ -1610,6 +2376,7 @@ void web_server_start(void *ioRtsManager)
     s_orig_vprintf = esp_log_set_vprintf(web_log_vprintf);
 
     syslog_init(CONFIG_IP_LAYER_HOSTNAME);
+    syslog_id_init();
     ota_key_init();
 
     ESP_LOGI(TAG, "HTTP server started");

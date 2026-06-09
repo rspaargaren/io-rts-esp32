@@ -35,22 +35,36 @@
         app.logStatus(result.message || ("Action " + action + " sent."), "debug");
     }
 
-    function updateDeviceFill(deviceId, percent) {
+    function updateDeviceFill(deviceId, percent, inverted, estimated) {
         const deviceEl = document.querySelector('.device[data-id="' + deviceId + '"]');
         if (!deviceEl) return;
-        const fill = 100 - percent;
-        deviceEl.style.background = "linear-gradient(to top, var(--color-input) " +
-            fill + "%, var(--color-accent3) " + fill + "%)";
+        deviceEl.classList.toggle("estimating", !!estimated);
+        var fill = 100 - percent;
+        var lo   = Math.max(0, fill - 6);
+        var mid  = fill;
+        var hi   = Math.min(100, fill + 12);
+        var dir  = inverted ? "to bottom" : "to top";
+        deviceEl.style.background =
+            "linear-gradient(" + dir + ", " +
+            "var(--color-input) " + lo + "%, " +
+            "var(--color-gradient-mid) " + mid + "%, " +
+            "var(--color-accent3) " + hi + "%)";
         var slider = deviceEl.querySelector('input[data-slider="position"]');
         if (slider) slider.value = percent;
     }
 
-    function createDeviceButton(label, className, onClick) {
-        const button = document.createElement("button");
-        button.textContent = label;
-        button.classList.add("btn", className);
-        button.addEventListener("click", onClick);
-        return button;
+    function updateDeviceState(deviceId, isStopped) {
+        var el = document.querySelector('.device[data-id="' + deviceId + '"]');
+        if (el) el.classList.toggle("moving", isStopped === false);
+    }
+
+    function createCardButton(label, ariaLabel, onClick) {
+        var btn = document.createElement("button");
+        btn.textContent = label;
+        btn.className = "card-btn";
+        btn.setAttribute("aria-label", ariaLabel);
+        btn.addEventListener("click", onClick);
+        return btn;
     }
 
     function createTextButton(label, onClick) {
@@ -63,9 +77,9 @@
 
     function createSlider(app, device, action, initialValue) {
         var wrapper = document.createElement("div");
-        wrapper.className = "slider-row";
+        wrapper.className = "card-slider-row";
         var lbl = document.createElement("span");
-        lbl.className = "slider-label";
+        lbl.className = "card-slider-label";
         lbl.textContent = action === "tilt"
             ? app.i18nText("label.tilt", "Tilt")
             : action === "dim"
@@ -76,7 +90,7 @@
         slider.min = "0";
         slider.max = "100";
         slider.value = (initialValue !== undefined && initialValue >= 0) ? initialValue : 0;
-        slider.className = "device-slider";
+        slider.className = "card-slider";
         if (action === "position") slider.dataset.slider = "position";
         slider.addEventListener("change", function () {
             runAction(app, device.id, action, parseInt(slider.value, 10))
@@ -90,8 +104,9 @@
     function createFavButton(app, device) {
         var fav = getFavPos(device.id);
         var btn = document.createElement("button");
-        btn.className = "btn-fav" + (fav !== null ? " has-favorite" : "");
+        btn.className = "card-fav" + (fav !== null ? " has-favorite" : "");
         btn.textContent = fav !== null ? "★" : "☆";
+        btn.setAttribute("aria-label", app.i18nText("button.favorite", "Favourite"));
         btn.title = fav !== null
             ? (app.i18nText("button.favorite", "Favorite") + ": " + fav + "%")
             : app.i18nText("popup.no_favorite_set", "No favorite set");
@@ -112,14 +127,14 @@
         var btn = document.querySelector('button[data-fav-device="' + deviceId + '"]');
         if (!btn) return;
         var fav = getFavPos(deviceId);
-        btn.className = "btn-fav" + (fav !== null ? " has-favorite" : "");
+        btn.className = "card-fav" + (fav !== null ? " has-favorite" : "");
         btn.textContent = fav !== null ? "★" : "☆";
         btn.title = fav !== null ? ("Favorite: " + fav + "%") : "No favorite set";
     }
 
     function createButtonRow(buttons) {
         var row = document.createElement("div");
-        row.className = "device-btn-row";
+        row.className = "card-btn-row";
         buttons.forEach(function (b) { row.appendChild(b); });
         return row;
     }
@@ -127,13 +142,13 @@
     function buildControls(app, device, listItem, group) {
         if (group === "shutter" || group === "venetian" || group === "window") {
             listItem.appendChild(createButtonRow([
-                createDeviceButton("↑", "open", function () {
+                createCardButton("↑", app.i18nText("button.open", "Open"), function () {
                     runAction(app, device.id, "open").catch(function (e) { app.logStatus(e.message, "error"); });
                 }),
-                createDeviceButton("■", "stop", function () {
+                createCardButton("■", app.i18nText("button.stop", "Stop"), function () {
                     runAction(app, device.id, "stop").catch(function (e) { app.logStatus(e.message, "error"); });
                 }),
-                createDeviceButton("↓", "down", function () {
+                createCardButton("↓", app.i18nText("button.close", "Close"), function () {
                     runAction(app, device.id, "close").catch(function (e) { app.logStatus(e.message, "error"); });
                 }),
                 createFavButton(app, device)
@@ -145,10 +160,10 @@
 
         } else if (group === "gate") {
             listItem.appendChild(createButtonRow([
-                createDeviceButton("↑", "open", function () {
+                createCardButton("↑", app.i18nText("button.open", "Open"), function () {
                     runAction(app, device.id, "open").catch(function (e) { app.logStatus(e.message, "error"); });
                 }),
-                createDeviceButton("↓", "down", function () {
+                createCardButton("↓", app.i18nText("button.close", "Close"), function () {
                     runAction(app, device.id, "close").catch(function (e) { app.logStatus(e.message, "error"); });
                 })
             ]));
@@ -349,12 +364,13 @@
             devices.forEach(function (device) {
                 var group = getDeviceGroup(device);
 
-                const nameSpan = document.createElement("span");
+                const nameSpan = document.createElement("div");
                 nameSpan.textContent = device.name;
+                nameSpan.className = "card-name";
 
                 const typeBadge = document.createElement("span");
                 typeBadge.textContent = device.type_name || "";
-                typeBadge.className = "type-badge";
+                typeBadge.className = "card-badge";
 
                 const listItem = document.createElement("li");
                 listItem.classList.add("device");
@@ -372,13 +388,18 @@
                     buildControls(app, device, listItem, group);
                 }
 
-                listItem.appendChild(createDeviceButton(
-                    app.i18nText("button.edit", "edit"), "edit",
-                    function () { buildEditPopup(app, device, group); }
-                ));
+                var menuBtn = document.createElement("button");
+                menuBtn.textContent = "⋯";
+                menuBtn.className = "btn menu";
+                menuBtn.setAttribute("aria-label", app.i18nText("button.edit", "Edit"));
+                menuBtn.addEventListener("click", function () { buildEditPopup(app, device, group); });
+                listItem.appendChild(menuBtn);
 
                 deviceList.appendChild(listItem);
-                if (!device.inactive && device.position >= 0) updateDeviceFill(device.id, device.position);
+                if (!device.inactive && device.position >= 0) {
+                    updateDeviceFill(device.id, device.position, !!device.is_inverted);
+                }
+                updateDeviceState(device.id, device.is_stopped);
             });
 
             app.logStatus("Device list updated.", "info");
@@ -571,6 +592,7 @@
     function init(app) {
         app.fetchAndDisplayDevices = function () { return fetchAndDisplayDevices(app); };
         app.updateDeviceFill = updateDeviceFill;
+        app.updateDeviceState = updateDeviceState;
         app.pairingWizard = pairingWizard;
 
         var pairBtn = document.getElementById("pair-device-btn");

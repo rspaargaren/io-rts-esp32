@@ -1,0 +1,32 @@
+# sdkconfig.defaults.heltec
+# Board-specific overrides for the Heltec WiFi Kit 32 (ESP32).
+# Committed to git — contains NO secrets (no WiFi credentials, MQTT passwords, OTA keys, etc.).
+# Used by CI to build Heltec firmware: idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.heltec" build
+#
+# sdkconfig.defaults targets esp32s3 (LilyGo board); this file overrides the
+# settings that differ for the classic ESP32 Heltec board.
+
+# Target chip
+CONFIG_IDF_TARGET="esp32"
+
+# Flash
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_OFFSET=0xf000
+
+# Console — ESP32 uses hardware UART0, not USB Serial/JTAG (which is S3-only)
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# CPU frequency
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Application features (same as defaults, listed here for completeness)
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_MQTT_PROTOCOL_5=y
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_WEB_ENABLED=y
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

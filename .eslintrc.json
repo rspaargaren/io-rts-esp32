@@ -1,0 +1,18 @@
+{
+  "env": {
+    "browser": true,
+    "es2020": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2020
+  },
+  "rules": {
+    "no-unused-vars": ["warn", { "varsIgnorePattern": "^_", "argsIgnorePattern": "^_" }],
+    "no-undef": "error",
+    "no-console": "off"
+  },
+  "globals": {
+    "showToast": "readonly",
+    "window": "readonly"
+  }
+}

@@ -6,6 +6,7 @@
 #include "web_server.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "ioRtsMan";
@@ -145,7 +146,7 @@ namespace IoRts
             sIoRtsManager->mIoDevicesMutex.unlock(); // release mutex as MQTT needs it!
 #if CONFIG_WEB_ENABLED
             if (device.position != iohome::UNKNOWN_POSITION)
-                web_server_broadcast_position(deviceID.c_str(), (int)device.position, device.is_stopped);
+                web_server_broadcast_position(deviceID.c_str(), (int)device.position, device.is_stopped, false);
 #endif
             // send MQTT messages
             if (sMqttHelper != nullptr)
@@ -157,6 +158,36 @@ namespace IoRts
                 sMqttHelper->SendIoDeviceStatus(deviceID);
             }
         }
+    }
+
+    // ── Interpolation timer ─────────────────────────────────────────────────
+
+    static void interpolation_timer_cb(void *arg)
+    {
+        if (!sIoRtsManager) return;
+        int64_t now = esp_timer_get_time();
+
+        sIoRtsManager->mIoDevicesMutex.lock();
+        for (auto &[id, dev] : sIoRtsManager->mIoDevices)
+        {
+            if (dev.move_start_us == 0 || dev.transit_time_ms == 0)
+                continue;
+            int64_t elapsed_ms = (now - dev.move_start_us) / 1000;
+            float fraction = (float)elapsed_ms / (float)dev.transit_time_ms;
+            if (fraction > 1.0f) fraction = 1.0f;
+            float estimated = dev.move_start_pos + (dev.move_target_pos - dev.move_start_pos) * fraction;
+            int estimated_int = (int)estimated;
+#if CONFIG_WEB_ENABLED
+            web_server_broadcast_position(id.c_str(), estimated_int, false, true);
+#endif
+            if (sMqttHelper != nullptr)
+                sMqttHelper->PublishEstimatedPosition(id, estimated_int);
+
+            // Stop broadcasting once clamped (device should report back soon)
+            if (fraction >= 1.0f)
+                dev.move_start_us = 0;
+        }
+        sIoRtsManager->mIoDevicesMutex.unlock();
     }
 
     IoRtsManager::IoRtsManager()
@@ -177,6 +208,13 @@ namespace IoRts
         {
             sMqttHelper->StartMqttClient();
         }
+        // Start interpolation timer (fires every 1 s)
+        esp_timer_create_args_t ta = {};
+        ta.callback = interpolation_timer_cb;
+        ta.name = "interp";
+        esp_timer_handle_t th;
+        if (esp_timer_create(&ta, &th) == ESP_OK)
+            esp_timer_start_periodic(th, 1000000); // 1 s
     }
     void IoRtsManager::Reboot()
     {
@@ -347,23 +385,27 @@ namespace IoRts
 
         for (const auto &[deviceID, storedDevice] : storedDevices)
         {
+            // Copy transit_time_ms from storage into the in-memory device
+            iohome::IoDevice dev = storedDevice.device;
+            dev.transit_time_ms = storedDevice.transit_time_ms;
+
             // Add to our local map regardless of active/inactive state
             mIoDevicesMutex.lock();
-            mIoDevices.insert({deviceID, storedDevice.device});
+            mIoDevices.insert({deviceID, dev});
             mIoDevicesMutex.unlock();
-            if (!storedDevice.device.is_deleted)
+            if (!dev.is_deleted)
             {
                 // Only register active devices with the radio layer
-                mIoHome->RestoreDevice(deviceID, storedDevice.device);
+                mIoHome->RestoreDevice(deviceID, dev);
                 for (const std::string &remoteID : storedDevice.linked_remotes)
                     mIoHome->LinkRemoteToDevice(remoteID, deviceID);
-                ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s)",
-                         deviceID.c_str(), storedDevice.device.info.name, storedDevice.linked_remotes.size());
+                ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s), transit=%ums",
+                         deviceID.c_str(), dev.info.name, storedDevice.linked_remotes.size(), dev.transit_time_ms);
             }
             else
             {
                 ESP_LOGI(TAG, "Loaded inactive device %s (%s) — not registered with radio",
-                         deviceID.c_str(), storedDevice.device.info.name);
+                         deviceID.c_str(), dev.info.name);
             }
         }
     }
@@ -382,6 +424,71 @@ namespace IoRts
     bool IoRtsManager::IsCaptureActive() const
     {
         return sCaptureActive;
+    }
+
+    // ── Confirmation poll ────────────────────────────────────────────────────
+
+    struct ConfirmPollArg {
+        IoRtsManager *manager;
+        char deviceID[8]; // 6-char hex + null
+    };
+
+    static void confirmation_poll_cb(void *arg)
+    {
+        auto *a = static_cast<ConfirmPollArg *>(arg);
+        if (a->manager && a->manager->mIoHome)
+        {
+            ESP_LOGI("ioRtsMan", "Confirmation poll for %s", a->deviceID);
+            a->manager->mIoHome->ForceDeviceStatusUpdate(a->deviceID);
+        }
+        delete a;
+    }
+
+    void IoRtsManager::ScheduleConfirmationPoll(const std::string &deviceID, uint32_t transit_time_ms, float distance_fraction)
+    {
+        // Delay = transit_time * distance + 3 s offset; fallback = 60 s
+        uint64_t delay_us;
+        if (transit_time_ms > 0)
+            delay_us = (uint64_t)((float)transit_time_ms * distance_fraction * 1000) + 3000000ULL;
+        else
+            delay_us = 60000000ULL; // 60 s fallback
+
+        auto *arg = new ConfirmPollArg();
+        arg->manager = this;
+        strncpy(arg->deviceID, deviceID.c_str(), sizeof(arg->deviceID) - 1);
+        arg->deviceID[sizeof(arg->deviceID) - 1] = '\0';
+
+        esp_timer_create_args_t ta = {};
+        ta.callback = confirmation_poll_cb;
+        ta.arg = arg;
+        ta.name = "conf_poll";
+        esp_timer_handle_t th;
+        if (esp_timer_create(&ta, &th) == ESP_OK)
+            esp_timer_start_once(th, delay_us);
+    }
+
+    bool IoRtsManager::SetTransitTime(const std::string &deviceID, uint32_t transit_time_ms)
+    {
+        // Update in-memory device
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool found = it != mIoDevices.end();
+        if (found)
+            it->second.transit_time_ms = transit_time_ms;
+        mIoDevicesMutex.unlock();
+
+        if (!found)
+            return false;
+
+        // Persist to NVS
+        Helpers::StoredIoDevice stored;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) != ESP_OK)
+            return false;
+        stored.transit_time_ms = transit_time_ms;
+        esp_err_t err = Helpers::DeviceStorage::SaveIoDevice(deviceID, stored);
+        if (err == ESP_OK)
+            ESP_LOGI(TAG, "Transit time for %s set to %ums", deviceID.c_str(), transit_time_ms);
+        return err == ESP_OK;
     }
 
     void IoRtsManager::StartKeySniff()
@@ -407,6 +514,23 @@ namespace IoRts
         return mIoHome->GetSniffedKey();
     }
 
+    bool IoRtsManager::GetMqttConnected() const
+    {
+        return sMqttHelper != nullptr && sMqttHelper->IsMqttConnected();
+    }
+
+    const char *IoRtsManager::GetMqttStatusString() const
+    {
+        if (sMqttHelper == nullptr) return "disabled";
+        return sMqttHelper->GetMqttStatusString();
+    }
+
+    void IoRtsManager::TriggerMqttStart()
+    {
+        if (sMqttHelper != nullptr)
+            sMqttHelper->StartMqttClient();
+    }
+
     void IoRtsManager::InitializeIo()
     {
         // Initialize IO-HOMECONTROL
@@ -424,6 +548,10 @@ namespace IoRts
                 mIoHome->ConfigureRadio(IoHomeConfig::GetTxPower());
                 mIoHome->SetUnknownSenderCallback(unknownSenderCallback);
                 mIoHome->SetKeySniffCallback(keySniffCallback);
+                mIoHome->SetMovementStartedCallback([](const std::string &deviceID, uint32_t transit_ms, float dist) {
+                    if (sIoRtsManager)
+                        sIoRtsManager->ScheduleConfirmationPoll(deviceID, transit_ms, dist);
+                });
             }
         }
     }

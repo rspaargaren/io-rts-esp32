@@ -28,9 +28,11 @@ namespace Config
         /// @return ESP_OK if configuration put to storage without error
         static esp_err_t SetAccessPassword(const std::string &password);
 
-    private:
-        /// @brief Get access password from storage
+        /// @brief Get effective access password — NVS value if set, otherwise compile-time default
         /// @return current password
+        static const std::string GetEffectiveAccessPassword();
+
+    private:
         static const std::string GetAccessPassword();
     };
 

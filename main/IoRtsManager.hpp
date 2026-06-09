@@ -61,6 +61,18 @@ namespace IoRts
         /// @brief Returns true if a remote capture window is currently open
         bool IsCaptureActive() const;
 
+        /// @brief Set transit time for a device (persists to NVS)
+        /// @param deviceID Device ID
+        /// @param transit_time_ms Transit time in milliseconds (0 = uncalibrated)
+        /// @return true on success
+        bool SetTransitTime(const std::string &deviceID, uint32_t transit_time_ms);
+
+        /// @brief Schedule a confirmation poll for a device after its estimated stop time
+        /// @param deviceID Device ID
+        /// @param transit_time_ms Transit time (0 = use 60 s fallback)
+        /// @param distance_fraction Fraction of full range being traveled (0.0-1.0)
+        void ScheduleConfirmationPoll(const std::string &deviceID, uint32_t transit_time_ms, float distance_fraction);
+
         /// @brief Start passive key sniffing — captures the IO system key from the next pairing handshake
         void StartKeySniff();
 
@@ -76,6 +88,15 @@ namespace IoRts
         /// @brief Retrieve current configuration about passive / active mode
         /// @return true if currently in passive mode
         bool isIoPassive() { return mIoPassive; }
+
+        /// @brief Returns true if MQTT broker is currently connected
+        bool GetMqttConnected() const;
+
+        /// @brief Returns current MQTT status as a string: disabled/connecting/connected/disconnected/error
+        const char *GetMqttStatusString() const;
+
+        /// @brief Start MQTT client immediately (if enabled and not already started)
+        void TriggerMqttStart();
 
     private:
         bool mIoPassive = false; // current configuration, initialized at boot

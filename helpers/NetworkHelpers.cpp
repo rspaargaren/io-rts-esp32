@@ -1,5 +1,6 @@
 #include "NetworkHelpers.hpp"
 #include "NetworkConfig.hpp"
+#include "MiscConfig.hpp"
 #include "WifiProvision.hpp"
 #include "esp_system.h"
 #include "HardwareConfig.hpp"
@@ -170,10 +171,10 @@ namespace Helpers
         ap_cfg.ap.channel         = 1;
         ap_cfg.ap.max_connection  = 4;
         ap_cfg.ap.beacon_interval = 200;
-        if (strlen(CONFIG_CMD_LINE_MANAGEMENT_DEFAULT_PWD) >= 8) {
+        std::string ap_pwd = Config::MiscConfig::GetEffectiveAccessPassword();
+        if (ap_pwd.length() >= 8) {
             ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
-            strncpy((char *)ap_cfg.ap.password, CONFIG_CMD_LINE_MANAGEMENT_DEFAULT_PWD,
-                    sizeof(ap_cfg.ap.password) - 1);
+            strncpy((char *)ap_cfg.ap.password, ap_pwd.c_str(), sizeof(ap_cfg.ap.password) - 1);
         } else {
             ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
             ESP_LOGW(TAG, "CLI password < 8 chars — fallback AP is OPEN");
