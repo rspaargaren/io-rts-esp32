@@ -1173,22 +1173,37 @@ static esp_err_t api_ota_url_post(httpd_req_t *req)
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
     if (!client) { send_result(req, false, "HTTP client init failed"); return ESP_OK; }
 
-    if (esp_http_client_open(client, 0) != ESP_OK) {
-        esp_http_client_cleanup(client);
-        send_result(req, false, "HTTP connect failed");
-        return ESP_OK;
-    }
-    if (esp_http_client_fetch_headers(client) < 0) {
-        esp_http_client_close(client); esp_http_client_cleanup(client);
-        send_result(req, false, "HTTP fetch headers failed");
-        return ESP_OK;
-    }
-    int http_status = esp_http_client_get_status_code(client);
-    if (http_status != 200) {
+    // Manual redirect loop — esp_http_client only auto-follows redirects via perform(),
+    // not via the open/fetch_headers/read streaming API.
+    int http_status = 0;
+    for (int redir = 0; redir <= 5; redir++) {
+        if (esp_http_client_open(client, 0) != ESP_OK) {
+            esp_http_client_cleanup(client);
+            send_result(req, false, "HTTP connect failed");
+            return ESP_OK;
+        }
+        if (esp_http_client_fetch_headers(client) < 0) {
+            esp_http_client_close(client); esp_http_client_cleanup(client);
+            send_result(req, false, "HTTP fetch headers failed");
+            return ESP_OK;
+        }
+        http_status = esp_http_client_get_status_code(client);
+        if (http_status >= 200 && http_status < 300) break; // final response
+        if (http_status >= 300 && http_status < 400) {
+            esp_http_client_set_redirection(client);
+            esp_http_client_close(client);
+            continue;
+        }
+        // non-redirect error
         esp_http_client_close(client); esp_http_client_cleanup(client);
         char msg[64];
         snprintf(msg, sizeof(msg), "Download failed: HTTP %d", http_status);
         send_result(req, false, msg);
+        return ESP_OK;
+    }
+    if (http_status < 200 || http_status >= 300) {
+        esp_http_client_close(client); esp_http_client_cleanup(client);
+        send_result(req, false, "Too many redirects");
         return ESP_OK;
     }
 
