@@ -102,10 +102,17 @@ window.getLang = getLang;
         return data;
     }
 
+    function otaHeaders(extra) {
+        const headers = extra || {};
+        const key = window.MiOpenApi && window.MiOpenApi.otaKey;
+        if (key) headers["X-OTA-Key"] = key;
+        return headers;
+    }
+
     async function postJson(url, payload) {
         return requestJson(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: otaHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify(payload)
         });
     }
@@ -113,7 +120,7 @@ window.getLang = getLang;
     async function uploadFile(url, file) {
         const formData = new FormData();
         formData.append("file", file);
-        return requestJson(url, { method: "POST", body: formData });
+        return requestJson(url, { method: "POST", headers: otaHeaders(), body: formData });
     }
 
     async function downloadFile(url, filename) {

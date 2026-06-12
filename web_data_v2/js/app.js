@@ -1,45 +1,4 @@
 (function () {
-    function ensureApiModule() {
-        if (window.MiOpenApi) return;
-        function ensureJson(r) { return r.json().catch(function () { return {}; }); }
-        async function requestJson(url, options) {
-            var opts = options || {};
-            var method = (opts.method || "GET").toUpperCase();
-            var reqUrl = method === "GET" ? url + (url.indexOf("?") === -1 ? "?" : "&") + "_=" + Date.now() : url;
-            if (method === "GET") opts.cache = "no-store";
-            var response = await fetch(reqUrl, opts);
-            var data = await ensureJson(response);
-            if (!response.ok) throw new Error(data.message || ("HTTP error " + response.status));
-            return data;
-        }
-        window.MiOpenApi = {
-            downloadFile: async function (url, filename) {
-                var r = await fetch(url);
-                if (!r.ok) throw new Error("Network response was not ok");
-                var blob = await r.blob();
-                var a = document.createElement("a");
-                a.href = window.URL.createObjectURL(blob);
-                a.download = filename;
-                a.click();
-                window.URL.revokeObjectURL(a.href);
-            },
-            postJson: function (url, payload) {
-                var headers = { "Content-Type": "application/json" };
-                if (window.MiOpenApi.otaKey) headers["X-OTA-Key"] = window.MiOpenApi.otaKey;
-                return requestJson(url, { method: "POST", headers: headers, body: JSON.stringify(payload) });
-            },
-            otaKey: null,
-            requestJson: requestJson,
-            uploadFile: function (url, file) {
-                var fd = new FormData();
-                fd.append("file", file);
-                var headers = {};
-                if (window.MiOpenApi.otaKey) headers["X-OTA-Key"] = window.MiOpenApi.otaKey;
-                return requestJson(url, { method: "POST", headers: headers, body: fd });
-            }
-        };
-    }
-
     function createElements() {
         return {
             deviceList:           document.getElementById("device-list"),
@@ -297,7 +256,6 @@
     }
 
     document.addEventListener("DOMContentLoaded", function () {
-        ensureApiModule();
         initTheme();
 
         var app = {
