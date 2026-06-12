@@ -104,3 +104,4 @@ tools/console_probe.py
 *-prompt.md
 node_modules
 package-lock.json
+web_data_v2/version.json

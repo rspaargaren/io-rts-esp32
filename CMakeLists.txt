@@ -15,4 +15,7 @@ endif()
 
 project(io-rts-esp32)
 
+# Stamp web UI version into LittleFS so /api/info can report it
+file(WRITE ${CMAKE_SOURCE_DIR}/web_data_v2/version.json "{\"version\":\"${PROJECT_VER}\"}\n")
+
 littlefs_create_partition_image(web ${CMAKE_SOURCE_DIR}/web_data_v2 FLASH_IN_PROJECT)

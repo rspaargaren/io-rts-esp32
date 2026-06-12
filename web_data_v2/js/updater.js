@@ -144,7 +144,13 @@
             });
         })
         .then(function () {
-            setProgress("Update complete! Reloading…", 100);
+            return fetch("/api/info?" + Date.now(), { cache: "no-store" })
+                .then(function (r) { return r.json(); })
+                .catch(function () { return {}; });
+        })
+        .then(function (info) {
+            var ver = info.web_version ? " (web " + info.web_version + ")" : "";
+            setProgress("Update complete" + ver + "! Reloading…", 100);
             setTimeout(function () { location.reload(); }, 1500);
         })
         .catch(function (err) {

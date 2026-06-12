@@ -285,9 +285,22 @@
                 status.style.color = "";
                 pollUntilOnline(
                     function () {
-                        status.textContent = "Done — reloading…";
-                        status.style.color = "green";
-                        setTimeout(function () { location.reload(); }, 1500);
+                        fetch("/api/info?" + Date.now(), { cache: "no-store" })
+                            .then(function (r) { return r.json(); })
+                            .then(function (info) {
+                                var ver = info.web_version || "?";
+                                status.textContent = "Web UI updated to " + ver + " — reloading…";
+                                status.style.color = "green";
+                                var wel = document.getElementById("web-version");
+                                if (wel) wel.textContent = ver;
+                            })
+                            .catch(function () {
+                                status.textContent = "Done — reloading…";
+                                status.style.color = "green";
+                            })
+                            .finally(function () {
+                                setTimeout(function () { location.reload(); }, 1500);
+                            });
                     },
                     function () { setErr("Timed out waiting for device to come back online."); },
                     Date.now() + POLL_TIMEOUT

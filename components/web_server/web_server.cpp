@@ -1884,6 +1884,21 @@ static esp_err_t api_info_get(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "compile_date", desc->date);
     cJSON_AddStringToObject(obj, "compile_time", desc->time);
     cJSON_AddStringToObject(obj, "idf_ver",      desc->idf_ver);
+
+    FILE *vf = fopen(WEB_BASE_PATH "/version.json", "r");
+    if (vf) {
+        char buf[64] = {};
+        fread(buf, 1, sizeof(buf) - 1, vf);
+        fclose(vf);
+        cJSON *vj = cJSON_Parse(buf);
+        if (vj) {
+            cJSON *ver = cJSON_GetObjectItem(vj, "version");
+            if (cJSON_IsString(ver))
+                cJSON_AddStringToObject(obj, "web_version", ver->valuestring);
+            cJSON_Delete(vj);
+        }
+    }
+
     send_json(req, obj);
     return ESP_OK;
 }

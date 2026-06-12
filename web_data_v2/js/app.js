@@ -306,6 +306,8 @@
             .then(function (d) {
                 var el = document.getElementById("firmware-version");
                 if (el) el.textContent = d.version + " · " + d.compile_date;
+                var wel = document.getElementById("web-version");
+                if (wel) wel.textContent = d.web_version || "unknown";
                 if (window.MiOpenUpdater) window.MiOpenUpdater.init(d.version);
             })
             .catch(function () {});
