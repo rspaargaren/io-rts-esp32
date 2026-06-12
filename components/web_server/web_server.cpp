@@ -196,7 +196,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
         }
         if (!stored) {
             ESP_LOGW(TAG, "ws: max clients reached, rejecting fd=%d", fd);
-            httpd_sess_trigger_close(req->handle, fd);
+            if (fd >= 0) httpd_sess_trigger_close(req->handle, fd);
             return ESP_OK;
         }
         // Drain the trigger frame (browser sends {"type":"hello"} on open)
@@ -217,10 +217,11 @@ static esp_err_t ws_handler(httpd_req_t *req)
     if (err != ESP_OK) {
         s_diag_recv_err = (int)err;
         s_diag_recv_fd  = fd;
-        ESP_LOGW(TAG, "WS recv err fd=%d: %s", fd, esp_err_to_name(err));
+        ESP_LOGW(TAG, "WS recv err fd=%d: %s — closing session", fd, esp_err_to_name(err));
         for (int i = 0; i < WS_MAX_CLIENTS; i++)
             if (s_ws_fds[i] == fd) { s_ws_fds[i] = -1; break; }
-        return err;
+        if (fd >= 0) httpd_sess_trigger_close(req->handle, fd);
+        return ESP_OK;
     }
     if (frame.len > 0) {
         uint8_t *buf = (uint8_t *)malloc(frame.len + 1);
@@ -2333,6 +2334,9 @@ void web_server_start(void *ioRtsManager)
     config.task_priority = tskIDLE_PRIORITY + 3; // below radio (8), IO processing (6), status updates (4)
     config.max_uri_handlers = 48;
     config.max_open_sockets = 13; // browser opens many parallel connections for static files + WS
+    config.send_wait_timeout = 2;  // seconds; cap blocking sends to dead clients
+    config.recv_wait_timeout = 2;
+    config.lru_purge_enable  = true; // evict oldest socket when table is full
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.enable_so_linger = false;
 
