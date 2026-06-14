@@ -2380,7 +2380,7 @@ void web_server_start(void *ioRtsManager)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     config.task_priority = tskIDLE_PRIORITY + 3; // below radio (8), IO processing (6), status updates (4)
-    config.max_uri_handlers = 48;
+    config.max_uri_handlers = 52;
     config.max_open_sockets = 13; // browser opens many parallel connections for static files + WS
     config.send_wait_timeout = 2;  // seconds; cap blocking sends to dead clients
     config.recv_wait_timeout = 2;
