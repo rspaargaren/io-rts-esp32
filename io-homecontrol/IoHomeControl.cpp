@@ -1038,12 +1038,44 @@ namespace iohome
       uint32_t tahoma_freq = rxItem.frequency;
       IO_LOGI("LearnKeyFromController: CMD 29 from {}", buffToHexString(NODE_ID_SIZE, tahoma_node));
 
-      // Step 3: send CMD 38 with a fresh random challenge — Path 1 (receiver requests key).
-      // TaHoma is in key-send mode: it waits for CMD 38 and replies with CMD 32.
-      uint8_t our_challenge[HMAC_SIZE];
-      iohome::crypto::generate_challenge(our_challenge);
+      // Step 3: wait for TaHoma's CMD 31 (key init — TaHoma offers its key).
+      // Expected sequence: 29 → 31 → 3C → 38 → 32
+      {
+        RxFrameQueueItem item31;
+        if (!xQueueReceive(sRxIoQueue, &item31, pdMS_TO_TICKS(1000))
+            || item31.frame.command_id != CMD_KEY_INIT_TRANSFER)
+        {
+          uint8_t got = item31.frame.command_id;
+          ESP_LOGW(TAG, "LearnKeyFromController: no CMD 31 (got 0x%02X) — retrying", got);
+          vTaskPrioritySet(NULL, savedPriority);
+          xSemaphoreGive(sMutex);
+          continue;
+        }
+      }
+      ESP_LOGI(TAG, "LearnKeyFromController: CMD 31 received");
+
+      // Step 4: wait for TaHoma's CMD 3C (TaHoma's challenge to the ESP).
+      {
+        RxFrameQueueItem item3c;
+        if (!xQueueReceive(sRxIoQueue, &item3c, pdMS_TO_TICKS(1000))
+            || item3c.frame.command_id != CMD_CHALLENGE_REQUEST
+            || item3c.frame.data_len != HMAC_SIZE)
+        {
+          ESP_LOGW(TAG, "LearnKeyFromController: no CMD 3C after CMD 31 — retrying");
+          vTaskPrioritySet(NULL, savedPriority);
+          xSemaphoreGive(sMutex);
+          continue;
+        }
+        memcpy(tahoma_3c_challenge, item3c.frame.data, HMAC_SIZE);
+        have_tahoma_3c = true;
+      }
+      ESP_LOGI(TAG, "LearnKeyFromController: CMD 3C from TaHoma challenge=%s",
+               buffToHexString(HMAC_SIZE, tahoma_3c_challenge).c_str());
+
+      // Step 5: send CMD 38 with TaHoma's CMD 3C data as the challenge.
+      // TaHoma uses the challenge to encrypt CMD 32; echoing it back makes the IV deterministic.
       IoFrame launch_frame;
-      if (!create_launch_key_transfer(launch_frame, mOwnNodeId, tahoma_node, our_challenge)
+      if (!create_launch_key_transfer(launch_frame, mOwnNodeId, tahoma_node, tahoma_3c_challenge)
           || !TransmitFrame(launch_frame, tahoma_freq, SHORT_PREAMBLE_LENGTH))
       {
         IO_LOGE("LearnKeyFromController: failed to send CMD 38");
@@ -1051,58 +1083,34 @@ namespace iohome
         xSemaphoreGive(sMutex);
         continue;
       }
-      IO_LOGI("LearnKeyFromController: CMD 38 sent — waiting for CMD 3C/32");
+      IO_LOGI("LearnKeyFromController: CMD 38 sent — waiting for CMD 32");
 
-      // Step 4: TaHoma sends CMD 3C (its own challenge) before CMD 32.
-      // CMD 32 is encrypted with TaHoma's CMD 3C data, NOT our CMD 38 challenge.
-      // Capture CMD 3C first; fall back to our_challenge only if CMD 32 arrives directly.
-      bool got_cmd32 = false;
+      // Step 6: wait for CMD 32 (TaHoma's encrypted system key).
+      if (!xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
+          || rxItem.frame.command_id != CMD_KEY_TRANSFER
+          || rxItem.frame.data_len != AES_KEY_SIZE)
       {
-        RxFrameQueueItem first;
-        if (xQueueReceive(sRxIoQueue, &first, pdMS_TO_TICKS(250))) {
-          if (first.frame.command_id == CMD_CHALLENGE_REQUEST && first.frame.data_len == HMAC_SIZE) {
-            memcpy(tahoma_3c_challenge, first.frame.data, HMAC_SIZE);
-            have_tahoma_3c = true;
-            ESP_LOGI(TAG, "LearnKeyFromController: CMD 3C from TaHoma challenge=%s",
-                     buffToHexString(HMAC_SIZE, tahoma_3c_challenge).c_str());
-            // Now wait for CMD 32 that follows CMD 3C
-            if (xQueueReceive(sRxIoQueue, &rxItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)
-                && rxItem.frame.command_id == CMD_KEY_TRANSFER
-                && rxItem.frame.data_len == AES_KEY_SIZE) {
-              got_cmd32 = true;
-            }
-          } else if (first.frame.command_id == CMD_KEY_TRANSFER && first.frame.data_len == AES_KEY_SIZE) {
-            rxItem    = first;
-            got_cmd32 = true;
-          }
-        }
-      }
-      if (!got_cmd32) {
         IO_LOGE("LearnKeyFromController: no CMD 32 received");
         vTaskPrioritySet(NULL, savedPriority);
         xSemaphoreGive(sMutex);
         continue;
       }
 
-      // Step 5: decrypt TaHoma's key.
-      // Use TaHoma's CMD 3C challenge when available; fall back to our CMD 38 challenge.
-      const uint8_t *decrypt_challenge = have_tahoma_3c ? tahoma_3c_challenge : our_challenge;
-      IO_LOGI("LearnKeyFromController: CMD 32 received — decrypting with %s challenge",
-              have_tahoma_3c ? "TaHoma CMD 3C" : "our CMD 38");
+      // Step 7: decrypt TaHoma's key.
+      // Log raw CMD 32 and try both possible IV frame bytes (0x38 and 0x31) — log both
+      // results until we confirm which frame byte TaHoma uses for encryption.
       ESP_LOGI(TAG, "LearnKeyFromController: CMD 32 raw=%s",
                buffToHexString(AES_KEY_SIZE, rxItem.frame.data).c_str());
+      uint8_t cmd38_byte = CMD_LAUNCH_KEY_TRANSFER;   // 0x38
+      uint8_t cmd31_byte = CMD_KEY_INIT_TRANSFER;     // 0x31
+      uint8_t decrypted_38[AES_KEY_SIZE], decrypted_31[AES_KEY_SIZE];
+      iohome::crypto::crypt_2w_key(&cmd38_byte, 1, tahoma_3c_challenge, rxItem.frame.data, decrypted_38);
+      iohome::crypto::crypt_2w_key(&cmd31_byte, 1, tahoma_3c_challenge, rxItem.frame.data, decrypted_31);
+      ESP_LOGI(TAG, "LearnKeyFromController: key(IV=0x38)=%s", buffToHexString(AES_KEY_SIZE, decrypted_38).c_str());
+      ESP_LOGI(TAG, "LearnKeyFromController: key(IV=0x31)=%s", buffToHexString(AES_KEY_SIZE, decrypted_31).c_str());
 
-      uint8_t cmd38_byte = CMD_LAUNCH_KEY_TRANSFER;
-      uint8_t decrypted_key[AES_KEY_SIZE];
-      if (!iohome::crypto::crypt_2w_key(&cmd38_byte, 1, decrypt_challenge, rxItem.frame.data, decrypted_key))
-      {
-        IO_LOGE("LearnKeyFromController: key decryption failed");
-        vTaskPrioritySet(NULL, savedPriority);
-        xSemaphoreGive(sMutex);
-        continue;
-      }
-
-      std::string result = buffToHexString(AES_KEY_SIZE, decrypted_key);
+      // Use 0x38 variant as primary result — both are logged above for comparison.
+      std::string result = buffToHexString(AES_KEY_SIZE, decrypted_38);
       IO_LOGI("LearnKeyFromController: key received: {}", result);
 
       vTaskPrioritySet(NULL, savedPriority);
