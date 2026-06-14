@@ -158,6 +158,11 @@ namespace iohome
     /// @return System key on success, empty string on timeout or cancellation.
     std::string LearnKeyFromController(const volatile bool *active = nullptr);
 
+    /// @brief Wait for TaHoma's CMD 28 broadcast, respond with CMD 29 as a controller, then log
+    /// all frames TaHoma sends next.  Used for step-by-step protocol observation.
+    /// @param active Pointer to a bool the caller can set to false to cancel early.
+    void WaitAndRespondToCmd28(const volatile bool *active = nullptr);
+
     /// @brief Pretend to be a new 2W actuator waiting to be paired.
     /// TaHoma/CK in "add device" mode sends CMD 28 to the broadcast address (0x00003B).
     /// We respond as a ROLLER_SHUTTER device and complete the full key exchange to obtain the system key.

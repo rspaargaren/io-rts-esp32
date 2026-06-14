@@ -2146,6 +2146,54 @@ static esp_err_t api_pair_device_status_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── Send-key observation (step-by-step: respond to CMD 28 as controller, log response) ─
+
+static bool s_send_key_active = false;
+
+static void send_key_task(void *)
+{
+    ESP_LOGI(TAG, "Send-key observe task started");
+    if (!s_manager->mIoHome) {
+        s_send_key_active = false;
+        web_server_broadcast_message("{\"type\":\"send_key_done\"}");
+        vTaskDelete(nullptr);
+        return;
+    }
+    s_manager->mIoHome->WaitAndRespondToCmd28(&s_send_key_active);
+    s_send_key_active = false;
+    web_server_broadcast_message("{\"type\":\"send_key_done\"}");
+    vTaskDelete(nullptr);
+}
+
+static esp_err_t api_send_key_start_post(httpd_req_t *req)
+{
+    if (s_send_key_active) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"busy\"}");
+        return ESP_OK;
+    }
+    s_send_key_active = true;
+    xTaskCreate(send_key_task, "send_key_task", 4096, nullptr, 5, nullptr);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"started\"}");
+    return ESP_OK;
+}
+
+static esp_err_t api_send_key_stop_post(httpd_req_t *req)
+{
+    s_send_key_active = false;
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"stopped\"}");
+    return ESP_OK;
+}
+
+static esp_err_t api_send_key_status_get(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, s_send_key_active ? "{\"active\":true}" : "{\"active\":false}");
+    return ESP_OK;
+}
+
 // ─── Remote capture ─────────────────────────────────────────────────────────
 
 #define REMOTE_CAPTURE_TIMEOUT_MS 30000
@@ -2411,6 +2459,9 @@ void web_server_start(void *ioRtsManager)
     reg("/api/pair-device/start",        HTTP_POST, api_pair_device_start_post);
     reg("/api/pair-device/stop",         HTTP_POST, api_pair_device_stop_post);
     reg("/api/pair-device/status",       HTTP_GET,  api_pair_device_status_get);
+    reg("/api/send-key/start",           HTTP_POST, api_send_key_start_post);
+    reg("/api/send-key/stop",            HTTP_POST, api_send_key_stop_post);
+    reg("/api/send-key/status",          HTTP_GET,  api_send_key_status_get);
     reg("/api/remote/capture/start",  HTTP_POST, api_capture_start_post);
     reg("/api/remote/capture/cancel", HTTP_POST, api_capture_cancel_post);
 

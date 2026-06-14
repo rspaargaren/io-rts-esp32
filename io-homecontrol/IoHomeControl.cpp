@@ -978,10 +978,7 @@ namespace iohome
 
     RxFrameQueueItem rxItem;
 
-    // TaHoma's CMD 3C challenge persists across retry iterations: TaHoma may send
-    // CMD 32 on iteration N using the CMD 3C challenge it sent on iteration N-1.
     uint8_t tahoma_3c_challenge[HMAC_SIZE];
-    bool have_tahoma_3c = false;
 
     // Wait for CMD 29 within timeout_ms, skipping CMD 28/2A/2E broadcasts.
     auto wait_for_cmd29 = [&](RxFrameQueueItem &item, int timeout_ms) -> bool {
@@ -1065,7 +1062,6 @@ namespace iohome
           continue;
         }
         memcpy(tahoma_3c_challenge, item3c.frame.data, HMAC_SIZE);
-        have_tahoma_3c = true;
       }
       ESP_LOGI(TAG, "LearnKeyFromController: CMD 3C from TaHoma challenge=%s",
                buffToHexString(HMAC_SIZE, tahoma_3c_challenge).c_str());
@@ -1118,6 +1114,82 @@ namespace iohome
 
     IO_LOGI("LearnKeyFromController: session ended (timeout or cancelled)");
     return "";
+  }
+
+  void IoHomeControl::WaitAndRespondToCmd28(const volatile bool *active)
+  {
+    if (!mInitialized || !mReceiving || mPassiveMode)
+    {
+      IO_LOGE("WaitAndRespondToCmd28: invalid state!");
+      return;
+    }
+
+    IO_LOGI("WaitAndRespondToCmd28: session started — listening for TaHoma CMD 28 (30 s)");
+
+    const int64_t deadline = esp_timer_get_time() + 30LL * 1000000LL;
+
+    while ((active == nullptr || *active) && esp_timer_get_time() < deadline)
+    {
+      // Wait for any frame from the radio queue
+      RxFrameQueueItem item;
+      if (!xQueueReceive(sRxIoQueue, &item, pdMS_TO_TICKS(2000)))
+        continue;
+
+      uint8_t cmd = item.frame.command_id;
+
+      if (cmd != CMD_DISCOVER_REQUEST)
+      {
+        ESP_LOGI(TAG, "WaitAndRespondToCmd28: skip CMD 0x%02X from %s",
+                 cmd, buffToHexString(NODE_ID_SIZE, item.frame.src_node).c_str());
+        continue;
+      }
+
+      uint8_t tahoma_node[NODE_ID_SIZE];
+      memcpy(tahoma_node, item.frame.src_node, NODE_ID_SIZE);
+      uint32_t tahoma_freq = item.frequency;
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 28 from %s freq=%lu",
+               buffToHexString(NODE_ID_SIZE, tahoma_node).c_str(), (unsigned long)tahoma_freq);
+
+      if (!xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+        continue;
+
+      UBaseType_t savedPriority = uxTaskPriorityGet(NULL);
+      vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
+
+      // Respond with CMD 29 using controller device type 1023 (0x3FF → data bytes FF C0)
+      IoFrame resp;
+      if (!create_discovery_response(resp, mOwnNodeId, tahoma_node, 1023)
+          || !TransmitFrame(resp, tahoma_freq, SHORT_PREAMBLE_LENGTH))
+      {
+        IO_LOGE("WaitAndRespondToCmd28: failed to send CMD 29");
+        vTaskPrioritySet(NULL, savedPriority);
+        xSemaphoreGive(sMutex);
+        continue;
+      }
+      ESP_LOGI(TAG, "WaitAndRespondToCmd28: CMD 29 sent (type=1023/controller) — observing TaHoma response");
+
+      // Collect whatever TaHoma sends in the next 2 s
+      int64_t obs_end = esp_timer_get_time() + 2000000LL;
+      while (esp_timer_get_time() < obs_end)
+      {
+        RxFrameQueueItem obs;
+        int64_t rem_us = obs_end - esp_timer_get_time();
+        if (rem_us <= 0) break;
+        TickType_t ticks = (TickType_t)(rem_us / 1000 / portTICK_PERIOD_MS);
+        if (ticks == 0) ticks = 1;
+        if (!xQueueReceive(sRxIoQueue, &obs, ticks)) break;
+        ESP_LOGI(TAG, "WaitAndRespondToCmd28: TaHoma sent CMD 0x%02X from %s data[%u]=%s",
+                 obs.frame.command_id,
+                 buffToHexString(NODE_ID_SIZE, obs.frame.src_node).c_str(),
+                 obs.frame.data_len,
+                 buffToHexString(obs.frame.data_len, obs.frame.data).c_str());
+      }
+
+      vTaskPrioritySet(NULL, savedPriority);
+      xSemaphoreGive(sMutex);
+    }
+
+    IO_LOGI("WaitAndRespondToCmd28: session ended");
   }
 
   std::string IoHomeControl::PairAsDevice(const volatile bool *active)

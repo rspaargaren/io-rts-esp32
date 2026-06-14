@@ -79,7 +79,7 @@ namespace iohome
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes)
     /// @return true on success
-    bool create_discovery_response(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t device_type = 0x04);
+    bool create_discovery_response(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint16_t device_type = 0x04);
 
     /// @brief Create a Discovery Confirmation IO Frame (0x2C)
     /// @param frame Output IoFrame structure

@@ -1,10 +1,11 @@
 (function () {
+    function g(id) { return document.getElementById(id); }
 
     let fallbackStatusTimer = null;
     let mqttStatusTimer = null;
 
     function updateMqttStatusEl(status) {
-        var el = document.getElementById("mqtt-conn-status");
+        var el = g("mqtt-conn-status");
         if (!el) return;
         var map = {
             connected:    { text: "● Connected",   color: "#27ae60" },
@@ -19,7 +20,7 @@
     }
 
     async function pollMqttStatus(app) {
-        var settingsView = document.getElementById("view-settings");
+        var settingsView = g("view-settings");
         if (!settingsView || !settingsView.classList.contains("active")) return;
         try {
             var cfg = await window.MiOpenApi.requestJson("/api/mqtt");
@@ -57,7 +58,7 @@
     }
 
     async function pollFallbackStatus(app) {
-        var settingsView = document.getElementById("view-settings");
+        var settingsView = g("view-settings");
         if (!settingsView || !settingsView.classList.contains("active")) return;
         try {
             const cfg = await window.MiOpenApi.requestJson("/api/wifi/fallback");
@@ -236,15 +237,15 @@
     }
 
     function initNetworkConfig(app) {
-        app.elements.netHostname    = document.getElementById("net-hostname");
-        app.elements.netDhcp        = document.getElementById("net-dhcp");
-        app.elements.netDhcpToggle  = document.getElementById("net-dhcp-toggle");
-        app.elements.netStaticFields= document.getElementById("net-static-fields");
-        app.elements.netIp          = document.getElementById("net-ip");
-        app.elements.netMask        = document.getElementById("net-mask");
-        app.elements.netGateway     = document.getElementById("net-gateway");
-        app.elements.netDns1        = document.getElementById("net-dns1");
-        app.elements.netSntp        = document.getElementById("net-sntp");
+        app.elements.netHostname    = g("net-hostname");
+        app.elements.netDhcp        = g("net-dhcp");
+        app.elements.netDhcpToggle  = g("net-dhcp-toggle");
+        app.elements.netStaticFields= g("net-static-fields");
+        app.elements.netIp          = g("net-ip");
+        app.elements.netMask        = g("net-mask");
+        app.elements.netGateway     = g("net-gateway");
+        app.elements.netDns1        = g("net-dns1");
+        app.elements.netSntp        = g("net-sntp");
 
         app.elements.netDhcpToggle.addEventListener("click", function () {
             app.elements.netDhcp.checked = !app.elements.netDhcp.checked;
@@ -252,7 +253,7 @@
             app.elements.netStaticFields.style.display = app.elements.netDhcp.checked ? "none" : "flex";
         });
 
-        document.getElementById("net-config-save").addEventListener("click", function () { saveNetworkConfig(app); });
+        g("net-config-save").addEventListener("click", function () { saveNetworkConfig(app); });
         loadNetworkConfig(app);
     }
 
@@ -295,10 +296,10 @@
     }
 
     function initIoConfig(app) {
-        app.elements.ioNodeIdInput          = document.getElementById("io-node-id");
-        app.elements.ioTxPowerInput         = document.getElementById("io-tx-power");
-        app.elements.ioPassiveModeCheckbox  = document.getElementById("io-passive-mode");
-        app.elements.ioPassiveToggle        = document.getElementById("io-passive-toggle");
+        app.elements.ioNodeIdInput          = g("io-node-id");
+        app.elements.ioTxPowerInput         = g("io-tx-power");
+        app.elements.ioPassiveModeCheckbox  = g("io-passive-mode");
+        app.elements.ioPassiveToggle        = g("io-passive-toggle");
 
         app.elements.ioPassiveToggle.addEventListener("click", function () {
             var chk = app.elements.ioPassiveModeCheckbox;
@@ -306,17 +307,17 @@
             app.elements.ioPassiveToggle.classList.toggle("on", chk.checked);
         });
 
-        document.getElementById("io-config-save").addEventListener("click", function () { saveIoConfig(app); });
+        g("io-config-save").addEventListener("click", function () { saveIoConfig(app); });
         loadIoConfig(app);
     }
 
     // ── Access Password ───────────────────────────────────────────────────────
 
     function initAccessPassword(app) {
-        app.elements.accessPasswordNew     = document.getElementById("access-password-new");
-        app.elements.accessPasswordConfirm = document.getElementById("access-password-confirm");
+        app.elements.accessPasswordNew     = g("access-password-new");
+        app.elements.accessPasswordConfirm = g("access-password-confirm");
 
-        document.getElementById("access-password-save").addEventListener("click", async function () {
+        g("access-password-save").addEventListener("click", async function () {
             const pwd     = app.elements.accessPasswordNew.value;
             const confirm = app.elements.accessPasswordConfirm.value;
 
@@ -350,9 +351,9 @@
     }
 
     function openIoKeyEditModal(app, prefill) {
-        const modal = document.getElementById("io-key-edit-modal");
-        const input = document.getElementById("io-key-new-input");
-        const status = document.getElementById("io-key-edit-status");
+        const modal = g("io-key-edit-modal");
+        const input = g("io-key-new-input");
+        const status = g("io-key-edit-status");
         input.value = prefill || "";
         status.textContent = "";
         modal.classList.add("open");
@@ -360,12 +361,12 @@
     }
 
     function closeIoKeyEditModal() {
-        document.getElementById("io-key-edit-modal").classList.remove("open");
+        g("io-key-edit-modal").classList.remove("open");
     }
 
     async function saveIoKey(app) {
-        const input = document.getElementById("io-key-new-input");
-        const status = document.getElementById("io-key-edit-status");
+        const input = g("io-key-new-input");
+        const status = g("io-key-edit-status");
         const key = input.value.trim().toUpperCase();
         if (!/^[0-9A-F]{32}$/.test(key)) {
             status.textContent = "Key must be exactly 32 hex characters (0-9, A-F).";
@@ -400,42 +401,42 @@
     }
 
     function openSniffModal() {
-        const modal = document.getElementById("io-key-sniff-modal");
-        document.getElementById("io-sniff-instructions").style.display = "";
-        document.getElementById("io-sniff-countdown-row").style.display = "none";
-        document.getElementById("io-sniff-result-row").style.display = "none";
-        document.getElementById("io-sniff-status").textContent = "";
-        document.getElementById("io-sniff-start").style.display = "";
-        document.getElementById("io-sniff-use-key").style.display = "none";
-        document.getElementById("io-sniff-retry").style.display = "none";
+        const modal = g("io-key-sniff-modal");
+        g("io-sniff-instructions").style.display = "";
+        g("io-sniff-countdown-row").style.display = "none";
+        g("io-sniff-result-row").style.display = "none";
+        g("io-sniff-status").textContent = "";
+        g("io-sniff-start").style.display = "";
+        g("io-sniff-use-key").style.display = "none";
+        g("io-sniff-retry").style.display = "none";
         modal.classList.add("open");
     }
 
     async function startSniff(app) {
-        document.getElementById("io-sniff-start").style.display = "none";
-        document.getElementById("io-sniff-retry").style.display = "none";
-        document.getElementById("io-sniff-result-row").style.display = "none";
-        document.getElementById("io-sniff-status").textContent = "";
-        document.getElementById("io-sniff-instructions").style.display = "none";
-        document.getElementById("io-sniff-countdown-row").style.display = "";
+        g("io-sniff-start").style.display = "none";
+        g("io-sniff-retry").style.display = "none";
+        g("io-sniff-result-row").style.display = "none";
+        g("io-sniff-status").textContent = "";
+        g("io-sniff-instructions").style.display = "none";
+        g("io-sniff-countdown-row").style.display = "";
 
         sniffSecondsLeft = 120;
-        document.getElementById("io-sniff-countdown").textContent = sniffSecondsLeft;
+        g("io-sniff-countdown").textContent = sniffSecondsLeft;
 
         try { await window.MiOpenApi.postJson("/api/io/sniff", { active: true }); } catch (e) {
-            document.getElementById("io-sniff-status").textContent = "Failed to start: " + (e.message || e);
-            document.getElementById("io-sniff-start").style.display = "";
+            g("io-sniff-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-sniff-start").style.display = "";
             return;
         }
 
         sniffCountdownTimer = setInterval(function () {
             sniffSecondsLeft--;
-            document.getElementById("io-sniff-countdown").textContent = sniffSecondsLeft;
+            g("io-sniff-countdown").textContent = sniffSecondsLeft;
             if (sniffSecondsLeft <= 0) {
                 stopSniffPoll();
-                document.getElementById("io-sniff-countdown-row").style.display = "none";
-                document.getElementById("io-sniff-status").textContent = "No key captured. Try again.";
-                document.getElementById("io-sniff-retry").style.display = "";
+                g("io-sniff-countdown-row").style.display = "none";
+                g("io-sniff-status").textContent = "No key captured. Try again.";
+                g("io-sniff-retry").style.display = "";
             }
         }, 1000);
 
@@ -444,64 +445,64 @@
                 const r = await window.MiOpenApi.requestJson("/api/io/sniff");
                 if (r && r.key) {
                     stopSniffPoll();
-                    document.getElementById("io-sniff-countdown-row").style.display = "none";
-                    document.getElementById("io-sniff-captured-key").textContent = r.key;
-                    document.getElementById("io-sniff-result-row").style.display = "";
-                    document.getElementById("io-sniff-use-key").dataset.key = r.key;
-                    document.getElementById("io-sniff-use-key").style.display = "";
+                    g("io-sniff-countdown-row").style.display = "none";
+                    g("io-sniff-captured-key").textContent = r.key;
+                    g("io-sniff-result-row").style.display = "";
+                    g("io-sniff-use-key").dataset.key = r.key;
+                    g("io-sniff-use-key").style.display = "";
                 }
             } catch (e) { /* ignore poll errors */ }
         }, 2000);
     }
 
     function useSniffedKey(app) {
-        const key = document.getElementById("io-sniff-use-key").dataset.key;
-        document.getElementById("io-key-sniff-modal").classList.remove("open");
+        const key = g("io-sniff-use-key").dataset.key;
+        g("io-key-sniff-modal").classList.remove("open");
         stopSniffPoll();
         openIoKeyEditModal(app, key);
     }
 
     function initIoKey(app) {
-        app.elements.ioKeyDisplay = document.getElementById("io-key-display");
-        app.elements.ioKeyStatus  = document.getElementById("io-key-status");
+        app.elements.ioKeyDisplay = g("io-key-display");
+        app.elements.ioKeyStatus  = g("io-key-status");
 
-        document.getElementById("io-key-show").addEventListener("click", function () {
+        g("io-key-show").addEventListener("click", function () {
             const el = app.elements.ioKeyDisplay;
             el.type = el.type === "password" ? "text" : "password";
             this.textContent = el.type === "password" ? "Show" : "Hide";
         });
 
-        document.getElementById("io-key-edit").addEventListener("click", function () {
+        g("io-key-edit").addEventListener("click", function () {
             openIoKeyEditModal(app, app.elements.ioKeyDisplay.value);
         });
 
-        document.getElementById("io-key-sniff").addEventListener("click", function () {
+        g("io-key-sniff").addEventListener("click", function () {
             openSniffModal();
         });
 
-        document.getElementById("io-key-edit-cancel").addEventListener("click", closeIoKeyEditModal);
-        document.getElementById("io-key-edit-save").addEventListener("click", function () { saveIoKey(app); });
-        document.getElementById("io-key-generate").addEventListener("click", function () {
+        g("io-key-edit-cancel").addEventListener("click", closeIoKeyEditModal);
+        g("io-key-edit-save").addEventListener("click", function () { saveIoKey(app); });
+        g("io-key-generate").addEventListener("click", function () {
             const bytes = new Uint8Array(16);
             crypto.getRandomValues(bytes);
             const hex = Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, "0").toUpperCase(); }).join("");
-            document.getElementById("io-key-new-input").value = hex;
-            document.getElementById("io-key-edit-status").textContent = "";
+            g("io-key-new-input").value = hex;
+            g("io-key-edit-status").textContent = "";
         });
-        document.getElementById("io-key-edit-modal").addEventListener("click", function (e) {
+        g("io-key-edit-modal").addEventListener("click", function (e) {
             if (e.target === this) closeIoKeyEditModal();
         });
 
-        document.getElementById("io-sniff-cancel").addEventListener("click", async function () {
+        g("io-sniff-cancel").addEventListener("click", async function () {
             await cancelSniff();
-            document.getElementById("io-key-sniff-modal").classList.remove("open");
+            g("io-key-sniff-modal").classList.remove("open");
         });
-        document.getElementById("io-key-sniff-modal").addEventListener("click", async function (e) {
+        g("io-key-sniff-modal").addEventListener("click", async function (e) {
             if (e.target === this) { await cancelSniff(); this.classList.remove("open"); }
         });
-        document.getElementById("io-sniff-start").addEventListener("click", function () { startSniff(app); });
-        document.getElementById("io-sniff-retry").addEventListener("click", function () { startSniff(app); });
-        document.getElementById("io-sniff-use-key").addEventListener("click", function () { useSniffedKey(app); });
+        g("io-sniff-start").addEventListener("click", function () { startSniff(app); });
+        g("io-sniff-retry").addEventListener("click", function () { startSniff(app); });
+        g("io-sniff-use-key").addEventListener("click", function () { useSniffedKey(app); });
 
         initLearnKey(app);
         initPairDeviceKey(app);
@@ -509,7 +510,7 @@
     }
 
     function initReboot() {
-        var btn = document.getElementById("reboot-btn");
+        var btn = g("reboot-btn");
         if (!btn) return;
         btn.addEventListener("click", function () {
             if (!confirm("Reboot the device now?")) return;
@@ -540,20 +541,20 @@
 
     function init(app) {
 
-        app.elements.fallbackEnabled        = document.getElementById("fallback-enabled");
-        app.elements.fallbackRetriesBoot    = document.getElementById("fallback-retries-boot");
-        app.elements.fallbackRetriesRunning = document.getElementById("fallback-retries-running");
-        app.elements.fallbackTimeout        = document.getElementById("fallback-timeout");
-        app.elements.fallbackStatus         = document.getElementById("fallback-status");
+        app.elements.fallbackEnabled        = g("fallback-enabled");
+        app.elements.fallbackRetriesBoot    = g("fallback-retries-boot");
+        app.elements.fallbackRetriesRunning = g("fallback-retries-running");
+        app.elements.fallbackTimeout        = g("fallback-timeout");
+        app.elements.fallbackStatus         = g("fallback-status");
         app.loadFallbackConfig = function () { return loadFallbackConfig(app); };
         app.saveFallbackConfig = function () { return saveFallbackConfig(app); };
-        document.getElementById("fallback-save").addEventListener("click", function () { app.saveFallbackConfig(); });
+        g("fallback-save").addEventListener("click", function () { app.saveFallbackConfig(); });
         loadFallbackConfig(app);
         fallbackStatusTimer = setInterval(function () { pollFallbackStatus(app); }, 15000);
         mqttStatusTimer = setInterval(function () { pollMqttStatus(app); }, 3000);
 
-        app.elements.mqttEnabledInput  = document.getElementById("mqtt-enabled");
-        app.elements.mqttEnabledToggle = document.getElementById("mqtt-enabled-toggle");
+        app.elements.mqttEnabledInput  = g("mqtt-enabled");
+        app.elements.mqttEnabledToggle = g("mqtt-enabled-toggle");
         var mqttSaveInFlight = false;
         app.elements.mqttEnabledToggle.addEventListener("click", function () {
             if (mqttSaveInFlight) return;
@@ -564,12 +565,12 @@
             updateMqttConfig(app, true).finally(function () { mqttSaveInFlight = false; });
         });
 
-        app.elements.wifiSsidInput     = document.getElementById("wifi-ssid");
-        app.elements.wifiPasswordInput = document.getElementById("wifi-password");
-        app.elements.wifiStatus        = document.getElementById("wifi-config-status");
+        app.elements.wifiSsidInput     = g("wifi-ssid");
+        app.elements.wifiPasswordInput = g("wifi-password");
+        app.elements.wifiStatus        = g("wifi-config-status");
         app.loadWifiConfig  = function () { return loadWifiConfig(app); };
         app.saveWifiConfig  = function () { return saveWifiConfig(app); };
-        document.getElementById("wifi-config-save").addEventListener("click", function () { app.saveWifiConfig(); });
+        g("wifi-config-save").addEventListener("click", function () { app.saveWifiConfig(); });
         loadWifiConfig(app);
 
         initNetworkConfig(app);
@@ -579,9 +580,9 @@
         initReboot();
 
         // Update channel toggle
-        var betaCheckbox = document.getElementById("update-channel-beta");
-        var betaLabel = document.getElementById("update-channel-label");
-        var betaToggle = document.getElementById("update-channel-toggle");
+        var betaCheckbox = g("update-channel-beta");
+        var betaLabel = g("update-channel-label");
+        var betaToggle = g("update-channel-toggle");
         if (betaCheckbox && betaToggle) {
             var savedChannel = localStorage.getItem("updateChannel") || "stable";
             betaCheckbox.checked = savedChannel === "beta";
@@ -599,8 +600,8 @@
 
         (function () {
 
-            var scanBtn     = document.getElementById("wifi-scan-btn");
-            var scanResults = document.getElementById("wifi-scan-results");
+            var scanBtn     = g("wifi-scan-btn");
+            var scanResults = g("wifi-scan-results");
             var ssidInput   = app.elements.wifiSsidInput;
             if (!scanBtn) return;
 
@@ -705,11 +706,11 @@
     function onKeyCaptured(key) {
         if (!key) return;
         stopSniffPoll();
-        document.getElementById("io-sniff-countdown-row").style.display = "none";
-        document.getElementById("io-sniff-captured-key").textContent = key;
-        document.getElementById("io-sniff-result-row").style.display = "";
-        document.getElementById("io-sniff-use-key").dataset.key = key;
-        document.getElementById("io-sniff-use-key").style.display = "";
+        g("io-sniff-countdown-row").style.display = "none";
+        g("io-sniff-captured-key").textContent = key;
+        g("io-sniff-result-row").style.display = "";
+        g("io-sniff-use-key").dataset.key = key;
+        g("io-sniff-use-key").style.display = "";
     }
 
     // ── IO Key Learn (receive key from TaHoma / Connectivity Kit) ────────────
@@ -719,12 +720,12 @@
 
     function resetLearnModal() {
         if (learnCountdownTimer) { clearInterval(learnCountdownTimer); learnCountdownTimer = null; }
-        document.getElementById("io-learn-countdown-row").style.display = "none";
-        document.getElementById("io-learn-result-row").style.display = "none";
-        document.getElementById("io-learn-status").textContent = "";
-        document.getElementById("io-learn-start").style.display = "";
-        document.getElementById("io-learn-retry").style.display = "none";
-        document.getElementById("io-learn-use-key").style.display = "none";
+        g("io-learn-countdown-row").style.display = "none";
+        g("io-learn-result-row").style.display = "none";
+        g("io-learn-status").textContent = "";
+        g("io-learn-start").style.display = "";
+        g("io-learn-retry").style.display = "none";
+        g("io-learn-use-key").style.display = "none";
     }
 
     async function cancelLearn() {
@@ -733,30 +734,30 @@
     }
 
     async function startLearn(app) {
-        document.getElementById("io-learn-start").style.display = "none";
-        document.getElementById("io-learn-retry").style.display = "none";
-        document.getElementById("io-learn-result-row").style.display = "none";
-        document.getElementById("io-learn-status").textContent = "";
-        document.getElementById("io-learn-countdown-row").style.display = "";
+        g("io-learn-start").style.display = "none";
+        g("io-learn-retry").style.display = "none";
+        g("io-learn-result-row").style.display = "none";
+        g("io-learn-status").textContent = "";
+        g("io-learn-countdown-row").style.display = "";
 
         learnSecondsLeft = 120;
-        document.getElementById("io-learn-countdown").textContent = learnSecondsLeft;
+        g("io-learn-countdown").textContent = learnSecondsLeft;
 
         try { await window.MiOpenApi.postJson("/api/learn/start", {}); } catch (e) {
-            document.getElementById("io-learn-status").textContent = "Failed to start: " + (e.message || e);
-            document.getElementById("io-learn-countdown-row").style.display = "none";
-            document.getElementById("io-learn-start").style.display = "";
+            g("io-learn-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-learn-countdown-row").style.display = "none";
+            g("io-learn-start").style.display = "";
             return;
         }
 
         learnCountdownTimer = setInterval(function () {
             learnSecondsLeft--;
-            document.getElementById("io-learn-countdown").textContent = learnSecondsLeft;
+            g("io-learn-countdown").textContent = learnSecondsLeft;
             if (learnSecondsLeft <= 0) {
                 clearInterval(learnCountdownTimer); learnCountdownTimer = null;
-                document.getElementById("io-learn-countdown-row").style.display = "none";
-                document.getElementById("io-learn-status").textContent = "No key received. Try again.";
-                document.getElementById("io-learn-retry").style.display = "";
+                g("io-learn-countdown-row").style.display = "none";
+                g("io-learn-status").textContent = "No key received. Try again.";
+                g("io-learn-retry").style.display = "";
             }
         }, 1000);
     }
@@ -764,47 +765,47 @@
     function onLearnActive(remaining_s) {
         if (remaining_s !== undefined) {
             learnSecondsLeft = remaining_s;
-            document.getElementById("io-learn-countdown").textContent = learnSecondsLeft;
+            g("io-learn-countdown").textContent = learnSecondsLeft;
         }
     }
 
     function onLearnFailed() {
         if (learnCountdownTimer) { clearInterval(learnCountdownTimer); learnCountdownTimer = null; }
-        document.getElementById("io-learn-countdown-row").style.display = "none";
-        document.getElementById("io-learn-status").textContent = "Handshake failed — TaHoma did not complete the key exchange.";
-        document.getElementById("io-learn-retry").style.display = "";
+        g("io-learn-countdown-row").style.display = "none";
+        g("io-learn-status").textContent = "Handshake failed — TaHoma did not complete the key exchange.";
+        g("io-learn-retry").style.display = "";
     }
 
     function onLearnKey(key) {
         if (!key) return;
         if (learnCountdownTimer) { clearInterval(learnCountdownTimer); learnCountdownTimer = null; }
-        document.getElementById("io-learn-countdown-row").style.display = "none";
-        document.getElementById("io-learn-captured-key").textContent = key;
-        document.getElementById("io-learn-result-row").style.display = "";
-        document.getElementById("io-learn-use-key").dataset.key = key;
-        document.getElementById("io-learn-use-key").style.display = "";
-        document.getElementById("io-learn-status").textContent = "Key received!";
+        g("io-learn-countdown-row").style.display = "none";
+        g("io-learn-captured-key").textContent = key;
+        g("io-learn-result-row").style.display = "";
+        g("io-learn-use-key").dataset.key = key;
+        g("io-learn-use-key").style.display = "";
+        g("io-learn-status").textContent = "Key received!";
     }
 
     function initLearnKey(app) {
-        document.getElementById("io-key-learn").addEventListener("click", function () {
+        g("io-key-learn").addEventListener("click", function () {
             resetLearnModal();
-            document.getElementById("io-key-learn-modal").classList.add("open");
+            g("io-key-learn-modal").classList.add("open");
         });
 
-        document.getElementById("io-learn-cancel").addEventListener("click", async function () {
+        g("io-learn-cancel").addEventListener("click", async function () {
             await cancelLearn();
-            document.getElementById("io-key-learn-modal").classList.remove("open");
+            g("io-key-learn-modal").classList.remove("open");
         });
-        document.getElementById("io-key-learn-modal").addEventListener("click", async function (e) {
+        g("io-key-learn-modal").addEventListener("click", async function (e) {
             if (e.target === this) { await cancelLearn(); this.classList.remove("open"); }
         });
-        document.getElementById("io-learn-start").addEventListener("click", function () { startLearn(app); });
-        document.getElementById("io-learn-retry").addEventListener("click", function () { startLearn(app); });
-        document.getElementById("io-learn-use-key").addEventListener("click", async function () {
+        g("io-learn-start").addEventListener("click", function () { startLearn(app); });
+        g("io-learn-retry").addEventListener("click", function () { startLearn(app); });
+        g("io-learn-use-key").addEventListener("click", async function () {
             const key = this.dataset.key;
             await cancelLearn();
-            document.getElementById("io-key-learn-modal").classList.remove("open");
+            g("io-key-learn-modal").classList.remove("open");
             openIoKeyEditModal(app, key);
         });
     }
@@ -816,12 +817,12 @@
 
     function resetPairDeviceModal() {
         if (pairDeviceCountdownTimer) { clearInterval(pairDeviceCountdownTimer); pairDeviceCountdownTimer = null; }
-        document.getElementById("io-pair-device-countdown-row").style.display = "none";
-        document.getElementById("io-pair-device-result-row").style.display = "none";
-        document.getElementById("io-pair-device-status").textContent = "";
-        document.getElementById("io-pair-device-start").style.display = "";
-        document.getElementById("io-pair-device-retry").style.display = "none";
-        document.getElementById("io-pair-device-use-key").style.display = "none";
+        g("io-pair-device-countdown-row").style.display = "none";
+        g("io-pair-device-result-row").style.display = "none";
+        g("io-pair-device-status").textContent = "";
+        g("io-pair-device-start").style.display = "";
+        g("io-pair-device-retry").style.display = "none";
+        g("io-pair-device-use-key").style.display = "none";
     }
 
     async function cancelPairDevice() {
@@ -830,30 +831,30 @@
     }
 
     async function startPairDevice(app) {
-        document.getElementById("io-pair-device-start").style.display = "none";
-        document.getElementById("io-pair-device-retry").style.display = "none";
-        document.getElementById("io-pair-device-result-row").style.display = "none";
-        document.getElementById("io-pair-device-status").textContent = "";
-        document.getElementById("io-pair-device-countdown-row").style.display = "";
+        g("io-pair-device-start").style.display = "none";
+        g("io-pair-device-retry").style.display = "none";
+        g("io-pair-device-result-row").style.display = "none";
+        g("io-pair-device-status").textContent = "";
+        g("io-pair-device-countdown-row").style.display = "";
 
         pairDeviceSecondsLeft = 120;
-        document.getElementById("io-pair-device-countdown").textContent = pairDeviceSecondsLeft;
+        g("io-pair-device-countdown").textContent = pairDeviceSecondsLeft;
 
         try { await window.MiOpenApi.postJson("/api/pair-device/start", {}); } catch (e) {
-            document.getElementById("io-pair-device-status").textContent = "Failed to start: " + (e.message || e);
-            document.getElementById("io-pair-device-countdown-row").style.display = "none";
-            document.getElementById("io-pair-device-start").style.display = "";
+            g("io-pair-device-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-pair-device-countdown-row").style.display = "none";
+            g("io-pair-device-start").style.display = "";
             return;
         }
 
         pairDeviceCountdownTimer = setInterval(function () {
             pairDeviceSecondsLeft--;
-            document.getElementById("io-pair-device-countdown").textContent = pairDeviceSecondsLeft;
+            g("io-pair-device-countdown").textContent = pairDeviceSecondsLeft;
             if (pairDeviceSecondsLeft <= 0) {
                 clearInterval(pairDeviceCountdownTimer); pairDeviceCountdownTimer = null;
-                document.getElementById("io-pair-device-countdown-row").style.display = "none";
-                document.getElementById("io-pair-device-status").textContent = "No key received. Try again.";
-                document.getElementById("io-pair-device-retry").style.display = "";
+                g("io-pair-device-countdown-row").style.display = "none";
+                g("io-pair-device-status").textContent = "No key received. Try again.";
+                g("io-pair-device-retry").style.display = "";
             }
         }, 1000);
     }
@@ -861,56 +862,122 @@
     function onPairDeviceActive(remaining_s) {
         if (remaining_s !== undefined) {
             pairDeviceSecondsLeft = remaining_s;
-            document.getElementById("io-pair-device-countdown").textContent = pairDeviceSecondsLeft;
+            g("io-pair-device-countdown").textContent = pairDeviceSecondsLeft;
         }
     }
 
     function onPairDeviceFailed() {
         if (pairDeviceCountdownTimer) { clearInterval(pairDeviceCountdownTimer); pairDeviceCountdownTimer = null; }
-        document.getElementById("io-pair-device-countdown-row").style.display = "none";
-        document.getElementById("io-pair-device-status").textContent = "Handshake failed — TaHoma did not complete the key exchange.";
-        document.getElementById("io-pair-device-retry").style.display = "";
+        g("io-pair-device-countdown-row").style.display = "none";
+        g("io-pair-device-status").textContent = "Handshake failed — TaHoma did not complete the key exchange.";
+        g("io-pair-device-retry").style.display = "";
     }
 
     function onPairDeviceKey(key) {
         if (!key) return;
         if (pairDeviceCountdownTimer) { clearInterval(pairDeviceCountdownTimer); pairDeviceCountdownTimer = null; }
-        document.getElementById("io-pair-device-countdown-row").style.display = "none";
-        document.getElementById("io-pair-device-captured-key").textContent = key;
-        document.getElementById("io-pair-device-result-row").style.display = "";
-        document.getElementById("io-pair-device-use-key").dataset.key = key;
-        document.getElementById("io-pair-device-use-key").style.display = "";
-        document.getElementById("io-pair-device-status").textContent = "Key received!";
+        g("io-pair-device-countdown-row").style.display = "none";
+        g("io-pair-device-captured-key").textContent = key;
+        g("io-pair-device-result-row").style.display = "";
+        g("io-pair-device-use-key").dataset.key = key;
+        g("io-pair-device-use-key").style.display = "";
+        g("io-pair-device-status").textContent = "Key received!";
     }
 
     function initPairDeviceKey(app) {
-        document.getElementById("io-key-pair-device").addEventListener("click", function () {
+        g("io-key-pair-device").addEventListener("click", function () {
             resetPairDeviceModal();
-            document.getElementById("io-key-pair-device-modal").classList.add("open");
+            g("io-key-pair-device-modal").classList.add("open");
         });
-        document.getElementById("io-pair-device-cancel").addEventListener("click", async function () {
+        g("io-pair-device-cancel").addEventListener("click", async function () {
             await cancelPairDevice();
-            document.getElementById("io-key-pair-device-modal").classList.remove("open");
+            g("io-key-pair-device-modal").classList.remove("open");
         });
-        document.getElementById("io-key-pair-device-modal").addEventListener("click", async function (e) {
+        g("io-key-pair-device-modal").addEventListener("click", async function (e) {
             if (e.target === this) { await cancelPairDevice(); this.classList.remove("open"); }
         });
-        document.getElementById("io-pair-device-start").addEventListener("click", function () { startPairDevice(app); });
-        document.getElementById("io-pair-device-retry").addEventListener("click", function () { startPairDevice(app); });
-        document.getElementById("io-pair-device-use-key").addEventListener("click", async function () {
+        g("io-pair-device-start").addEventListener("click", function () { startPairDevice(app); });
+        g("io-pair-device-retry").addEventListener("click", function () { startPairDevice(app); });
+        g("io-pair-device-use-key").addEventListener("click", async function () {
             const key = this.dataset.key;
             await cancelPairDevice();
-            document.getElementById("io-key-pair-device-modal").classList.remove("open");
+            g("io-key-pair-device-modal").classList.remove("open");
             openIoKeyEditModal(app, key);
         });
+    }
+
+    // ── Send Key observation ──────────────────────────────────────────────────
+
+    let sendKeyTimer = null;
+    let sendKeySeconds = 0;
+
+    function resetSendKeyModal() {
+        if (sendKeyTimer) { clearInterval(sendKeyTimer); sendKeyTimer = null; }
+        g("io-send-key-countdown-row").style.display = "none";
+        g("io-send-key-status").textContent = "";
+        g("io-send-key-start").style.display = "";
+    }
+
+    async function startSendKey() {
+        if (sendKeyTimer) { clearInterval(sendKeyTimer); sendKeyTimer = null; }
+        g("io-send-key-start").style.display = "none";
+        g("io-send-key-status").textContent = "";
+        g("io-send-key-countdown-row").style.display = "";
+        sendKeySeconds = 30;
+        g("io-send-key-countdown").textContent = sendKeySeconds;
+        try { await window.MiOpenApi.postJson("/api/send-key/start", {}); } catch (e) {
+            g("io-send-key-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-send-key-countdown-row").style.display = "none";
+            g("io-send-key-start").style.display = "";
+            return;
+        }
+        sendKeyTimer = setInterval(function () {
+            sendKeySeconds--;
+            g("io-send-key-countdown").textContent = sendKeySeconds;
+            if (sendKeySeconds <= 0) {
+                clearInterval(sendKeyTimer); sendKeyTimer = null;
+                g("io-send-key-countdown-row").style.display = "none";
+                g("io-send-key-status").textContent = "Session ended. Check Graylog for observed frames.";
+                g("io-send-key-start").style.display = "";
+            }
+        }, 1000);
+    }
+
+    function onSendKeyDone() {
+        if (sendKeyTimer) { clearInterval(sendKeyTimer); sendKeyTimer = null; }
+        g("io-send-key-countdown-row").style.display = "none";
+        g("io-send-key-status").textContent = "Session ended. Check Graylog for observed frames.";
+        g("io-send-key-start").style.display = "";
+    }
+
+    function initSendKey() {
+        g("io-key-send-key").addEventListener("click", function () {
+            resetSendKeyModal();
+            g("io-send-key-modal").classList.add("open");
+        });
+        g("io-send-key-cancel").addEventListener("click", async function () {
+            if (sendKeyTimer) { clearInterval(sendKeyTimer); sendKeyTimer = null; }
+            try { await window.MiOpenApi.postJson("/api/send-key/stop", {}); } catch (e) { /* ignore */ }
+            g("io-send-key-modal").classList.remove("open");
+        });
+        g("io-send-key-modal").addEventListener("click", async function (e) {
+            if (e.target !== this) return;
+            if (sendKeyTimer) { clearInterval(sendKeyTimer); sendKeyTimer = null; }
+            try { await window.MiOpenApi.postJson("/api/send-key/stop", {}); } catch (e) { /* ignore */ }
+            this.classList.remove("open");
+        });
+        g("io-send-key-start").addEventListener("click", function () { startSendKey(); });
     }
 
     window.MiOpenSettings = {
         init: init,
         onKeyCaptured: onKeyCaptured,
         onLearnActive: onLearnActive, onLearnFailed: onLearnFailed, onLearnKey: onLearnKey,
-        onPairDeviceActive: onPairDeviceActive, onPairDeviceFailed: onPairDeviceFailed, onPairDeviceKey: onPairDeviceKey
+        onPairDeviceActive: onPairDeviceActive, onPairDeviceFailed: onPairDeviceFailed, onPairDeviceKey: onPairDeviceKey,
+        onSendKeyDone: onSendKeyDone
     };
+
+    init_hooks.push(function (app) { initSendKey(); });
 })();
 
 // ── Syslog (settings section) ─────────────────────────────────────────────────

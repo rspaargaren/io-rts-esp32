@@ -202,6 +202,10 @@
                     if (window.MiOpenSettings && window.MiOpenSettings.onPairDeviceKey) {
                         window.MiOpenSettings.onPairDeviceKey(data.key);
                     }
+                } else if (data.type === "send_key_done") {
+                    if (window.MiOpenSettings && window.MiOpenSettings.onSendKeyDone) {
+                        window.MiOpenSettings.onSendKeyDone();
+                    }
                 }
             } catch (e) { /* ignore parse errors */ }
         };

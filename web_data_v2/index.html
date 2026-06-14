@@ -319,6 +319,7 @@
               <button class="s-btn" id="io-key-sniff">Sniff</button>
               <button class="s-btn" id="io-key-learn">Learn</button>
               <button class="s-btn" id="io-key-pair-device">Pair</button>
+              <button class="s-btn" id="io-key-send-key">Send Key</button>
             </div>
             <span class="field-status" id="io-key-status"></span>
           </div>
@@ -652,6 +653,22 @@
       <button id="io-pair-device-retry"   type="button" class="btn-ghost" style="display:none;">Retry</button>
       <button id="io-pair-device-start"   class="btn-danger-confirm">Start Listening</button>
       <button id="io-pair-device-use-key" class="btn-danger-confirm" style="display:none;">Use This Key</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SEND KEY OBSERVE MODAL ── -->
+<div id="io-send-key-modal" class="key-modal">
+  <div class="key-modal-inner">
+    <h3>Send Key — Step 1: Observe CMD 28 / CMD 29</h3>
+    <p class="key-modal-warning-text">Trigger "Share key" or "Add controller" in the Somfy app. The ESP will respond to TaHoma's CMD 28 with CMD 29 (controller type) and log what TaHoma sends next. Check Graylog for frame details.</p>
+    <div id="io-send-key-countdown-row" style="display:none;margin:8px 0;font-size:13px;">
+      <span>Listening for TaHoma CMD 28… </span><strong id="io-send-key-countdown"></strong><span> s remaining</span>
+    </div>
+    <p id="io-send-key-status" class="key-modal-status"></p>
+    <div class="key-modal-actions" style="margin-top:12px;">
+      <button id="io-send-key-cancel" type="button" class="btn-ghost">Cancel</button>
+      <button id="io-send-key-start"  class="btn-danger-confirm">Start Observing</button>
     </div>
   </div>
 </div>

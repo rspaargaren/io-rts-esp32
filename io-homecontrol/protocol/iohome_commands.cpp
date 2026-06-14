@@ -213,7 +213,7 @@ namespace iohome
         return true;
     }
 
-    bool create_discovery_response(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t device_type)
+    bool create_discovery_response(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint16_t device_type)
     {
         init_frame(frame, true, true, false, false);
         set_destination(frame, dst_node_id);
