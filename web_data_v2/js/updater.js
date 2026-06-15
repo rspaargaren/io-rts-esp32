@@ -124,6 +124,10 @@
         }
 
         otaFromUrl(firmwareUrl, "firmware", otaKey, function (s) { setProgress(s, 25); })
+        .catch(function (err) {
+            if (err instanceof TypeError) { setProgress("Rebooting…", null); return; }
+            throw err;
+        })
         .then(function () {
             setProgress("Waiting for device to come back online…", null);
             return new Promise(function (resolve, reject) {

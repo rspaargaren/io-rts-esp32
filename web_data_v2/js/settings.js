@@ -745,7 +745,7 @@
         g("io-learn-countdown").textContent = learnSecondsLeft;
 
         try { await window.MiOpenApi.postJson("/api/learn/start", {}); } catch (e) {
-            g("io-learn-status").textContent = "Failed to start: " + (e.message || e);
+            g("io-learn-status").textContent = e.message || "Failed to start.";
             g("io-learn-countdown-row").style.display = "none";
             g("io-learn-start").style.display = "";
             return;

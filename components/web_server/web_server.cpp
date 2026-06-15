@@ -2069,6 +2069,12 @@ static esp_err_t api_learn_start_post(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"status\":\"busy\"}");
         return ESP_OK;
     }
+    if (Config::IoHomeConfig::isPassiveModeEnabled()) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"message\":\"Passive mode is enabled — disable it in Settings first.\"}");
+        return ESP_OK;
+    }
     s_learn_active = true;
     xTaskCreate(learn_task, "learn_task", 4096, nullptr, 5, nullptr);
     httpd_resp_set_type(req, "application/json");
