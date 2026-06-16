@@ -391,25 +391,16 @@
             <progress id="ota-web-progress" max="100" value="0" style="display:none;"></progress>
             <span id="ota-web-status" class="field-status"></span>
           </div>
-          <!-- Devices backup -->
+          <!-- Backup / Restore -->
           <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
-            <span class="row-label" data-i18n="section.backup">Backup / Restore</span>
-            <div>
-              <label style="font-size:11px;color:var(--text3);">Devices (.json)</label>
-              <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-                <input type="file" id="devices-file" accept=".json" class="s-input" style="flex:1;padding:5px 10px;">
-                <button class="s-btn" id="upload-devices">Upload</button>
-                <button class="s-btn" id="download-devices">Download</button>
-              </div>
+            <span class="row-label">Backup / Restore</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="s-btn" id="backup-export">Export Backup</button>
+              <button class="s-btn" id="backup-import-btn">Import Backup</button>
+              <input type="file" id="backup-file" accept=".json" style="display:none">
+              <button class="s-btn danger" id="factory-reset-btn">Factory Reset</button>
             </div>
-            <div>
-              <label style="font-size:11px;color:var(--text3);">Remotes (.json)</label>
-              <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
-                <input type="file" id="remotes-file" accept=".json" class="s-input" style="flex:1;padding:5px 10px;">
-                <button class="s-btn" id="upload-remotes">Upload</button>
-                <button class="s-btn" id="download-remotes">Download</button>
-              </div>
-            </div>
+            <span id="backup-status" class="field-status"></span>
           </div>
           <!-- Reboot -->
           <div class="settings-row">
@@ -423,6 +414,7 @@
               <span style="font-size:12px;color:var(--text2);" id="update-channel-label">Stable only</span>
               <div class="s-toggle" id="update-channel-toggle"></div>
               <input type="checkbox" id="update-channel-beta" style="display:none">
+              <button class="s-btn" id="check-updates-btn">Check</button>
             </div>
           </div>
         </div>

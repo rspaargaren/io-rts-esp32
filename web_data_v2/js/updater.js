@@ -1,10 +1,10 @@
 (function () {
-    var GITHUB_API = "https://api.github.com/repos/rspaargaren/io-rts-esp32/releases";
-    var STORAGE_CHANNEL = "updateChannel";
-    var STORAGE_DISMISSED = "updateDismissed";
+    var GA = "https://api.github.com/repos/rspaargaren/io-rts-esp32/releases";
+    var SC = "updateChannel";
+    var SD = "updateDismissed";
 
     function getChannel() {
-        return localStorage.getItem(STORAGE_CHANNEL) || "stable";
+        return localStorage.getItem(SC) || "stable";
     }
 
     function parseVersion(tag) {
@@ -48,7 +48,7 @@
         banner.style.display = "";
 
         dismissBtn.onclick = function () {
-            localStorage.setItem(STORAGE_DISMISSED, tag);
+            localStorage.setItem(SD, tag);
             banner.style.display = "none";
         };
 
@@ -166,10 +166,10 @@
 
     function checkForUpdates(currentVersion) {
         if (!parseVersion(currentVersion)) return;
-        var dismissed = localStorage.getItem(STORAGE_DISMISSED);
+        var dismissed = localStorage.getItem(SD);
         var channel = getChannel();
 
-        fetch(GITHUB_API, { cache: "no-store" })
+        fetch(GA, { cache: "no-store" })
             .then(function (r) { return r.json(); })
             .then(function (releases) {
                 var candidates = releases.filter(function (r) {
@@ -189,6 +189,8 @@
 
     function init(currentVersion) {
         checkForUpdates(currentVersion);
+        var btn = document.getElementById("check-updates-btn");
+        if (btn) btn.addEventListener("click", function () { localStorage.removeItem(SD); checkForUpdates(currentVersion); });
     }
 
     window.MiOpenUpdater = { init: init, getChannel: getChannel };

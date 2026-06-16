@@ -2,10 +2,6 @@
     function createElements() {
         return {
             deviceList:           document.getElementById("device-list"),
-            devicesFileInput:     document.getElementById("devices-file"),
-            devicesUploadButton:  document.getElementById("upload-devices"),
-            downloadDevicesButton:document.getElementById("download-devices"),
-            downloadRemotesButton:document.getElementById("download-remotes"),
             helpDeviceButton:     document.getElementById("help-device"),
             helpRemoteButton:     document.getElementById("help-remote"),
             logFilter:            document.getElementById("select-log"),
@@ -18,8 +14,6 @@
             mqttUpdateButton:     document.getElementById("mqtt-update"),
             mqttUserInput:        document.getElementById("mqtt-user"),
             remotePopupButton:    document.getElementById("remote-popup"),
-            remotesFileInput:     document.getElementById("remotes-file"),
-            remotesUploadButton:  document.getElementById("upload-remotes"),
             statusMessages:       document.getElementById("status-messages"),
             syslogEnabledInput:   document.getElementById("syslog-enabled"),
             syslogServerInput:    document.getElementById("syslog-server"),
@@ -232,22 +226,6 @@
         if (app.elements.mqttUpdateButton) {
             app.elements.mqttUpdateButton.addEventListener("click", app.updateMqttConfig);
         }
-        if (app.elements.devicesUploadButton) {
-            app.elements.devicesUploadButton.addEventListener("click", app.uploadDevices);
-        }
-        if (app.elements.remotesUploadButton) {
-            app.elements.remotesUploadButton.addEventListener("click", app.uploadRemotes);
-        }
-        if (app.elements.downloadDevicesButton) {
-            app.elements.downloadDevicesButton.addEventListener("click", function () {
-                window.MiOpenApi.downloadFile("/api/download/devices", "devices.json").catch(function (e) { app.logStatus("Error downloading: " + e.message, true); });
-            });
-        }
-        if (app.elements.downloadRemotesButton) {
-            app.elements.downloadRemotesButton.addEventListener("click", function () {
-                window.MiOpenApi.downloadFile("/api/download/remotes", "RemoteMap.json").catch(function (e) { app.logStatus("Error downloading: " + e.message, true); });
-            });
-        }
         if (app.elements.remotePopupButton) {
             app.elements.remotePopupButton.addEventListener("click", app.openAddRemotePopup);
         }
@@ -275,6 +253,7 @@
         window.MiOpenSettings.init(app);
         window.MiOpenSyslog.init(app);
         window.MiOpenOta.init(app);
+        window.MiOpenBackup.init(app);
         window.MiOpenApp = app;
 
         initLogFilter(app);

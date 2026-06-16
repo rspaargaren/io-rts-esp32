@@ -136,3 +136,47 @@ window.getLang = getLang;
 
     window.MiOpenApi = { downloadFile, postJson, requestJson, uploadFile };
 })();
+
+window.MiOpenBackup=(function(){
+function init(){
+var st=document.getElementById("backup-status");
+function ss(m,ok){if(st){st.textContent=m;st.style.color=ok===true?"var(--green)":ok===false?"var(--red)":"";}};
+function otaHdr(){var k=window.MiOpenApi&&window.MiOpenApi.otaKey;return k?{"X-OTA-Key":k}:{};};
+var exp=document.getElementById("backup-export");
+if(exp)exp.addEventListener("click",function(){
+ss("Exporting…");
+fetch("/api/backup",{headers:otaHdr()})
+.then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.blob();})
+.then(function(b){var a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="io-rts-backup.json";a.click();URL.revokeObjectURL(a.href);ss("Backup exported.",true);})
+.catch(function(e){ss("Export failed: "+e.message,false);});
+});
+var fi=document.getElementById("backup-file");
+var imp=document.getElementById("backup-import-btn");
+if(imp&&fi){
+imp.addEventListener("click",function(){fi.click();});
+fi.addEventListener("change",function(){
+var f=fi.files[0];if(!f)return;
+var rd=new FileReader();
+rd.onload=function(ev){
+if(!confirm("Restore this backup? Current settings will be overwritten.")){fi.value="";return;}
+ss("Restoring…");
+var h=Object.assign({"Content-Type":"application/json"},otaHdr());
+fetch("/api/restore",{method:"POST",headers:h,body:ev.target.result})
+.then(function(r){return r.json();})
+.then(function(d){ss(d.message,d.success);showToast(d.message,d.success?"success":"error");})
+.catch(function(e){ss("Restore failed: "+e.message,false);});
+fi.value="";};
+rd.readAsText(f);
+});}
+var rst=document.getElementById("factory-reset-btn");
+if(rst)rst.addEventListener("click",function(){
+if(!confirm("Factory reset will erase all settings and devices. Are you sure?"))return;
+if(!confirm("This cannot be undone. Confirm factory reset?"))return;
+ss("Resetting…");
+fetch("/api/factory-reset",{method:"POST",headers:otaHdr()})
+.then(function(r){return r.json();})
+.then(function(d){ss(d.message,d.success);if(d.success)showToast("Factory reset — device rebooting","success");})
+.catch(function(){ss("Factory reset sent.");});
+});}
+return{init:init};
+})();

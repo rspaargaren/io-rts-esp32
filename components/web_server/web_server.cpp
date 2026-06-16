@@ -22,6 +22,8 @@
 #include <format>
 #include <list>
 #include <cmath>
+#include <ctime>
+#include <dirent.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -1750,6 +1752,23 @@ static esp_err_t read_multipart_content(httpd_req_t *req, char **out)
     return ESP_OK;
 }
 
+static esp_err_t read_body_large(httpd_req_t *req, char **out)
+{
+    size_t len = req->content_len;
+    if (len == 0 || len > UPLOAD_MAX_LEN) return ESP_FAIL;
+    char *buf = (char *)malloc(len + 1);
+    if (!buf) return ESP_ERR_NO_MEM;
+    size_t received = 0;
+    while (received < len) {
+        int n = httpd_req_recv(req, buf + received, len - received);
+        if (n <= 0) { free(buf); return ESP_FAIL; }
+        received += (size_t)n;
+    }
+    buf[received] = '\0';
+    *out = buf;
+    return ESP_OK;
+}
+
 // Helper: serialize a StoredIoDevice to a cJSON object (same fields as DeviceStorage)
 static cJSON *stored_device_to_json(const std::string &deviceID, const Helpers::StoredIoDevice &sd)
 {
@@ -1975,6 +1994,246 @@ static esp_err_t api_upload_remotes(httpd_req_t *req)
     char msg[64];
     snprintf(msg, sizeof(msg), "Restored %d remote link(s).", count);
     send_result(req, true, msg);
+    return ESP_OK;
+}
+
+// ─── GET /api/backup ────────────────────────────────────────────────────────
+
+static esp_err_t api_backup_get(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "format", "io-rts-backup");
+    cJSON_AddNumberToObject(root, "format_version", 1);
+
+    time_t now = 0;
+    time(&now);
+    struct tm tm_info = {};
+    gmtime_r(&now, &tm_info);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_info);
+    cJSON_AddStringToObject(root, "created", ts);
+
+    const esp_app_desc_t *desc = esp_app_get_description();
+    cJSON_AddStringToObject(root, "firmware_version", desc->version);
+
+    std::map<std::string, Helpers::StoredIoDevice> storedDevices;
+    Helpers::DeviceStorage::LoadAllIoDevices(storedDevices);
+    cJSON *devArr = cJSON_CreateArray();
+    for (const auto &[deviceID, sd] : storedDevices)
+        cJSON_AddItemToArray(devArr, stored_device_to_json(deviceID, sd));
+    cJSON_AddItemToObject(root, "devices", devArr);
+
+    cJSON *creds = cJSON_CreateObject();
+    cJSON_AddStringToObject(creds, "_note", "WiFi password excluded (not accessible to app layer)");
+    cJSON_AddStringToObject(creds, "ota_key", s_ota_key);
+    cJSON_AddStringToObject(creds, "io_system_key", Config::IoHomeConfig::GetIoSystemKey().c_str());
+    cJSON_AddStringToObject(creds, "mqtt_password", Config::MqttConfig::GetClientPassword().c_str());
+    cJSON_AddItemToObject(root, "credentials", creds);
+
+    cJSON *settings = cJSON_CreateObject();
+
+    cJSON *mqtt = cJSON_CreateObject();
+    cJSON_AddBoolToObject(mqtt, "enabled", Config::MqttConfig::isEnabled());
+    cJSON_AddStringToObject(mqtt, "broker", Config::MqttConfig::GetBrokerAddress().c_str());
+    cJSON_AddNumberToObject(mqtt, "port", Config::MqttConfig::GetBrokerPort());
+    cJSON_AddStringToObject(mqtt, "client_id", Config::MqttConfig::GetClientId().c_str());
+    cJSON_AddStringToObject(mqtt, "username", Config::MqttConfig::GetClientUsername().c_str());
+    cJSON_AddBoolToObject(mqtt, "tls", Config::MqttConfig::isTLSEnabled());
+    cJSON_AddStringToObject(mqtt, "topic_prefix", Config::MqttConfig::GetTopicPrefix().c_str());
+    cJSON_AddStringToObject(mqtt, "discovery_prefix", Config::MqttConfig::GetDiscoveryPrefix().c_str());
+    cJSON_AddItemToObject(settings, "mqtt", mqtt);
+
+    cJSON *syslog_cfg = cJSON_CreateObject();
+    cJSON_AddBoolToObject(syslog_cfg, "enabled", Config::SyslogConfig::isEnabled());
+    cJSON_AddStringToObject(syslog_cfg, "server", Config::SyslogConfig::GetServer().c_str());
+    cJSON_AddNumberToObject(syslog_cfg, "port", Config::SyslogConfig::GetPort());
+    cJSON_AddNumberToObject(syslog_cfg, "facility", Config::SyslogConfig::GetFacility());
+    cJSON_AddNumberToObject(syslog_cfg, "min_level", Config::SyslogConfig::GetMinLevel());
+    cJSON_AddItemToObject(settings, "syslog", syslog_cfg);
+
+    cJSON *network = cJSON_CreateObject();
+    cJSON_AddStringToObject(network, "hostname", Config::NetworkConfig::GetHostname().c_str());
+    cJSON_AddBoolToObject(network, "dhcp", Config::NetworkConfig::isDHCP());
+    cJSON_AddStringToObject(network, "ip", Config::NetworkConfig::GetIpAddress().c_str());
+    cJSON_AddStringToObject(network, "mask", Config::NetworkConfig::GetNetworkMask().c_str());
+    cJSON_AddStringToObject(network, "gateway", Config::NetworkConfig::GetGatewayAddress().c_str());
+    cJSON_AddStringToObject(network, "dns", Config::NetworkConfig::GetMainDNSAddress().c_str());
+    cJSON_AddStringToObject(network, "sntp", Config::NetworkConfig::GetSNTPAddress().c_str());
+    cJSON_AddItemToObject(settings, "network", network);
+
+    cJSON *io_cfg = cJSON_CreateObject();
+    cJSON_AddStringToObject(io_cfg, "node_id", Config::IoHomeConfig::GetIoNodeId().c_str());
+    cJSON_AddNumberToObject(io_cfg, "tx_power", Config::IoHomeConfig::GetTxPower());
+    cJSON_AddBoolToObject(io_cfg, "passive_mode", Config::IoHomeConfig::isPassiveModeEnabled());
+    cJSON_AddItemToObject(settings, "io", io_cfg);
+
+    cJSON_AddItemToObject(root, "settings", settings);
+
+    char *str = cJSON_Print(root);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"io-rts-backup.json\"");
+    httpd_resp_sendstr(req, str ? str : "{}");
+    free(str);
+    return ESP_OK;
+}
+
+// ─── POST /api/restore ──────────────────────────────────────────────────────
+
+static esp_err_t api_restore_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    char *body = nullptr;
+    if (read_body_large(req, &body) != ESP_OK) {
+        send_result(req, false, "Failed to read body (too large or bad format)");
+        return ESP_OK;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+
+    cJSON *fmtItem = cJSON_GetObjectItem(root, "format");
+    if (!cJSON_IsString(fmtItem) || strcmp(fmtItem->valuestring, "io-rts-backup") != 0) {
+        cJSON_Delete(root);
+        send_result(req, false, "Not an io-rts-backup file");
+        return ESP_OK;
+    }
+
+    int deviceCount = 0;
+    cJSON *devArr = cJSON_GetObjectItem(root, "devices");
+    if (cJSON_IsArray(devArr)) {
+        cJSON *item = nullptr;
+        cJSON_ArrayForEach(item, devArr) {
+            std::string deviceID;
+            Helpers::StoredIoDevice sd = {};
+            if (!json_to_stored_device(item, deviceID, sd)) continue;
+            Helpers::DeviceStorage::SaveIoDevice(deviceID, sd);
+            if (s_manager->mIoHome) {
+                s_manager->mIoHome->RestoreDevice(deviceID, sd.device);
+                for (const std::string &remoteID : sd.linked_remotes)
+                    s_manager->mIoHome->LinkRemoteToDevice(remoteID, deviceID);
+            }
+            s_manager->mIoDevicesMutex.lock();
+            auto it = s_manager->mIoDevices.find(deviceID);
+            if (it != s_manager->mIoDevices.end()) it->second = sd.device;
+            else s_manager->mIoDevices.insert({deviceID, sd.device});
+            s_manager->mIoDevicesMutex.unlock();
+            deviceCount++;
+        }
+    }
+
+    cJSON *creds = cJSON_GetObjectItem(root, "credentials");
+    if (cJSON_IsObject(creds)) {
+        cJSON *otaKey = cJSON_GetObjectItem(creds, "ota_key");
+        if (cJSON_IsString(otaKey) && strlen(otaKey->valuestring) > 0) {
+            nvs_handle_t h;
+            if (nvs_open("ota", NVS_READWRITE, &h) == ESP_OK) {
+                nvs_set_str(h, "api_key", otaKey->valuestring);
+                nvs_commit(h);
+                nvs_close(h);
+                strncpy(s_ota_key, otaKey->valuestring, OTA_KEY_LEN);
+                s_ota_key[OTA_KEY_LEN] = '\0';
+            }
+        }
+        cJSON *ioKey = cJSON_GetObjectItem(creds, "io_system_key");
+        if (cJSON_IsString(ioKey) && strlen(ioKey->valuestring) == 32)
+            Config::IoHomeConfig::SetIoSystemKey(ioKey->valuestring);
+        cJSON *mqttPw = cJSON_GetObjectItem(creds, "mqtt_password");
+        if (cJSON_IsString(mqttPw))
+            Config::MqttConfig::SetClientPassword(mqttPw->valuestring);
+    }
+
+    cJSON *settings = cJSON_GetObjectItem(root, "settings");
+    if (cJSON_IsObject(settings)) {
+        cJSON *mqtt = cJSON_GetObjectItem(settings, "mqtt");
+        if (cJSON_IsObject(mqtt)) {
+            cJSON *v;
+            v = cJSON_GetObjectItem(mqtt, "enabled");           if (cJSON_IsBool(v)) Config::MqttConfig::Activate(cJSON_IsTrue(v));
+            v = cJSON_GetObjectItem(mqtt, "broker");            if (cJSON_IsString(v)) Config::MqttConfig::SetBrokerAddress(v->valuestring);
+            v = cJSON_GetObjectItem(mqtt, "port");              if (cJSON_IsNumber(v)) Config::MqttConfig::SetBrokerPort((uint16_t)v->valuedouble);
+            v = cJSON_GetObjectItem(mqtt, "client_id");         if (cJSON_IsString(v)) Config::MqttConfig::SetClientId(v->valuestring);
+            v = cJSON_GetObjectItem(mqtt, "username");          if (cJSON_IsString(v)) Config::MqttConfig::SetClientUsername(v->valuestring);
+            v = cJSON_GetObjectItem(mqtt, "tls");               if (cJSON_IsBool(v)) Config::MqttConfig::EnableTLS(cJSON_IsTrue(v));
+            v = cJSON_GetObjectItem(mqtt, "topic_prefix");      if (cJSON_IsString(v)) Config::MqttConfig::SetTopicPrefix(v->valuestring);
+            v = cJSON_GetObjectItem(mqtt, "discovery_prefix");  if (cJSON_IsString(v)) Config::MqttConfig::SetDiscoveryPrefix(v->valuestring);
+        }
+        cJSON *syslog_r = cJSON_GetObjectItem(settings, "syslog");
+        if (cJSON_IsObject(syslog_r)) {
+            cJSON *v;
+            v = cJSON_GetObjectItem(syslog_r, "enabled");    if (cJSON_IsBool(v)) Config::SyslogConfig::SetEnabled(cJSON_IsTrue(v));
+            v = cJSON_GetObjectItem(syslog_r, "server");     if (cJSON_IsString(v)) Config::SyslogConfig::SetServer(v->valuestring);
+            v = cJSON_GetObjectItem(syslog_r, "port");       if (cJSON_IsNumber(v)) Config::SyslogConfig::SetPort((uint16_t)v->valuedouble);
+            v = cJSON_GetObjectItem(syslog_r, "facility");   if (cJSON_IsNumber(v)) Config::SyslogConfig::SetFacility((uint8_t)v->valuedouble);
+            v = cJSON_GetObjectItem(syslog_r, "min_level");  if (cJSON_IsNumber(v)) Config::SyslogConfig::SetMinLevel((uint8_t)v->valuedouble);
+        }
+        cJSON *net = cJSON_GetObjectItem(settings, "network");
+        if (cJSON_IsObject(net)) {
+            cJSON *v;
+            v = cJSON_GetObjectItem(net, "hostname");  if (cJSON_IsString(v)) Config::NetworkConfig::SetHostname(v->valuestring);
+            v = cJSON_GetObjectItem(net, "dhcp");      if (cJSON_IsBool(v)) Config::NetworkConfig::SetDHCP(cJSON_IsTrue(v));
+            v = cJSON_GetObjectItem(net, "ip");        if (cJSON_IsString(v)) Config::NetworkConfig::SetIpAddress(v->valuestring);
+            v = cJSON_GetObjectItem(net, "mask");      if (cJSON_IsString(v)) Config::NetworkConfig::SetNetworkMask(v->valuestring);
+            v = cJSON_GetObjectItem(net, "gateway");   if (cJSON_IsString(v)) Config::NetworkConfig::SetGatewayAddress(v->valuestring);
+            v = cJSON_GetObjectItem(net, "dns");       if (cJSON_IsString(v)) Config::NetworkConfig::SetMainDNSAddress(v->valuestring);
+            v = cJSON_GetObjectItem(net, "sntp");      if (cJSON_IsString(v)) Config::NetworkConfig::SetSNTPAddress(v->valuestring);
+        }
+        cJSON *io_r = cJSON_GetObjectItem(settings, "io");
+        if (cJSON_IsObject(io_r)) {
+            cJSON *v;
+            v = cJSON_GetObjectItem(io_r, "node_id");      if (cJSON_IsString(v)) Config::IoHomeConfig::SetIoNodeId(v->valuestring);
+            v = cJSON_GetObjectItem(io_r, "tx_power");     if (cJSON_IsNumber(v)) Config::IoHomeConfig::SetTxPower((uint8_t)v->valuedouble);
+            v = cJSON_GetObjectItem(io_r, "passive_mode"); if (cJSON_IsBool(v)) Config::IoHomeConfig::ActivatePassiveMode(cJSON_IsTrue(v));
+        }
+    }
+
+    cJSON_Delete(root);
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Restored %d device(s). Reboot to fully apply.", deviceCount);
+    send_result(req, true, msg);
+    return ESP_OK;
+}
+
+// ─── POST /api/factory-reset ─────────────────────────────────────────────────
+
+static esp_err_t api_factory_reset_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+
+    const char *namespaces[] = { "mqtt", "syslog", "ota", "network", "iohc", "misc" };
+    for (const auto &ns : namespaces) {
+        nvs_handle_t h;
+        if (nvs_open(ns, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_erase_all(h);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
+
+    DIR *dir = opendir("/devices");
+    if (dir) {
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_name[0] == '.') continue;
+            char path[280];
+            snprintf(path, sizeof(path), "/devices/%s", entry->d_name);
+            remove(path);
+        }
+        closedir(dir);
+    }
+
+    send_result(req, true, "Factory reset complete. Rebooting.");
+    esp_timer_handle_t t;
+    esp_timer_create_args_t ta = {};
+    ta.callback = [](void *){ esp_restart(); };
+    ta.name = "web_factory_reset";
+    if (esp_timer_create(&ta, &t) == ESP_OK)
+        esp_timer_start_once(t, 500 * 1000);
+    else
+        esp_restart();
     return ESP_OK;
 }
 
@@ -2542,6 +2801,9 @@ void web_server_start(void *ioRtsManager)
     reg("/api/ota/web",           HTTP_POST, api_ota_web_post);
     reg("/api/ota/key",           HTTP_GET,  api_ota_key_get);
     reg("/api/ota/key",           HTTP_POST, api_ota_key_post);
+    reg("/api/backup",            HTTP_GET,  api_backup_get);
+    reg("/api/restore",           HTTP_POST, api_restore_post);
+    reg("/api/factory-reset",     HTTP_POST, api_factory_reset_post);
     reg("/api/reboot",            HTTP_POST, api_reboot_post);
     reg("/api/io/key",            HTTP_GET,  api_io_key_get);
     reg("/api/io/key",            HTTP_POST, api_io_key_post);
