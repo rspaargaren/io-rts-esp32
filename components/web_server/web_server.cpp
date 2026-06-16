@@ -2366,13 +2366,14 @@ static void pairing_task(void *)
         return;
     }
     const int MAX_ATTEMPTS = 60; // 60 × ~2 s = ~120 s window
-    bool ok = false;
+    iohome::PairResult result = iohome::PairResult::FAILED_NO_RESPONSE;
     int heartbeat_counter = 0;
     for (int attempt = 0; attempt < MAX_ATTEMPTS && s_pairing_active; attempt++)
     {
-        ok = s_manager->mIoHome->DiscoverAndPairDevice();
-        if (ok) break;
-        // Broadcast remaining time every ~5 attempts (~10 s)
+        result = s_manager->mIoHome->DiscoverAndPairDevice();
+        if (result == iohome::PairResult::PAIRED_FULL || result == iohome::PairResult::PAIRED_SHORTCUT_VERIFIED) break;
+        if (result == iohome::PairResult::FAILED_KEY_MISMATCH) break; // definitive — don't retry
+        // FAILED_NO_RESPONSE: keep scanning, broadcast remaining time every ~5 attempts (~10 s)
         if (++heartbeat_counter >= 5) {
             heartbeat_counter = 0;
             int remaining_s = (MAX_ATTEMPTS - attempt - 1) * 2;
@@ -2382,9 +2383,13 @@ static void pairing_task(void *)
         }
     }
     s_pairing_active = false;
-    if (!ok) {
+    if (result == iohome::PairResult::FAILED_KEY_MISMATCH) {
+        ESP_LOGW(TAG, "Pairing failed: device has a different system key");
+        web_server_broadcast_message("{\"type\":\"pair_failed\",\"status\":\"key_mismatch\","
+            "\"message\":\"Device found but has a different system key. Factory reset the device and try again.\"}");
+    } else if (result != iohome::PairResult::PAIRED_FULL && result != iohome::PairResult::PAIRED_SHORTCUT_VERIFIED) {
         ESP_LOGW(TAG, "Pairing timed out after 120 s");
-        web_server_broadcast_message("{\"type\":\"pair_failed\"}");
+        web_server_broadcast_message("{\"type\":\"pair_failed\",\"status\":\"timeout\"}");
     }
     // On success device_added is broadcast from deviceStatusCallback
     vTaskDelete(nullptr);

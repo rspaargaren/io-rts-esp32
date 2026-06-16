@@ -841,12 +841,12 @@ namespace iohome
     }
   }
 
-  bool IoHomeControl::DiscoverAndPairDevice()
+  PairResult IoHomeControl::DiscoverAndPairDevice()
   {
     if (!mInitialized || !mReceiving || mPassiveMode)
     {
       IO_LOGE("DiscoverAndPairDevice: invalid state! (not initialized or not listening or passive mode)");
-      return false;
+      return PairResult::FAILED_NO_RESPONSE;
     }
 
     if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
@@ -855,7 +855,7 @@ namespace iohome
       IoFrame response;
       IoDevice device;
       RxFrameQueueItem rxItem;
-      bool ret = false;
+      PairResult result = PairResult::FAILED_NO_RESPONSE;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
       // Send discovery request
@@ -892,7 +892,7 @@ namespace iohome
                 device.is_deleted = false;
                 sDeviceMap.insert({deviceID, device});
                 IO_LOGI("DiscoverAndPairDevice: device {} added!", deviceID);
-                ret = true;
+                result = PairResult::PAIRED_FULL;
                 // Now try to find "sub devices" (like a light or switch on DexxoSmartio800)
                 if (create_discoveryspe_request(request, mOwnNodeId, mSystemKey)          // request created
                     && TransmitFrame(request, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH)) // send OK
@@ -943,7 +943,25 @@ namespace iohome
               }
               else
               {
-                IO_LOGE("DiscoverAndPairDevice: failed to send key / no or bad answer received!");
+                // Key exchange failed — device may already share our key (re-pairing scenario).
+                // Add provisionally and verify with CMD 03. Already holding sMutex — call low-level directly.
+                std::string deviceID = buffToHexString(NODE_ID_SIZE, device.info.node_id);
+                device.is_deleted = false;
+                sDeviceMap.insert({deviceID, device});
+                IoFrame statusReq, statusResp;
+                if (create_getstatus03_request(statusReq, mOwnNodeId, device.info.node_id)
+                    && SendAndReceive(statusReq, statusResp, FREQUENCY_CHANNEL_2)
+                    && statusResp.command_id == CMD_PRIVATE_RESPONSE)
+                {
+                  IO_LOGI("DiscoverAndPairDevice: shortcut verified — device {} responds to CMD 03, shared key confirmed", deviceID);
+                  result = PairResult::PAIRED_SHORTCUT_VERIFIED;
+                }
+                else
+                {
+                  IO_LOGE("DiscoverAndPairDevice: CMD 03 no response — device {} has a different key, factory reset required", deviceID);
+                  sDeviceMap.erase(deviceID);
+                  result = PairResult::FAILED_KEY_MISMATCH;
+                }
               }
             }
           }
@@ -963,12 +981,12 @@ namespace iohome
       }
       vTaskPrioritySet(NULL, currentPriority); // restore task priority
       xSemaphoreGive(sMutex);
-      return ret;
+      return result;
     }
     else
     {
       IO_LOGE("DiscoverAndPairDevice: failed to take mutex!");
-      return false;
+      return PairResult::FAILED_NO_RESPONSE;
     }
   }
 

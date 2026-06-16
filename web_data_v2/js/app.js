@@ -161,7 +161,7 @@
                 } else if (data.type === "pairing_active") {
                     if (app.pairingWizard) app.pairingWizard.onPairingActive(data.remaining_s || 0);
                 } else if (data.type === "pair_failed") {
-                    if (app.pairingWizard) app.pairingWizard.onPairFailed();
+                    if (app.pairingWizard) app.pairingWizard.onPairFailed(data);
                 } else if (data.type === "remote_seen") {
                     if (app.pairingWizard) app.pairingWizard.onRemoteSeen(data.id);
                     if (window.MiOpenRemotes) window.MiOpenRemotes.onRemoteSeen(data.id);

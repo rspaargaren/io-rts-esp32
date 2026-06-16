@@ -560,10 +560,14 @@ makeBtn(_app.i18nText("button.skip","Done"), "", cancel)
 ]);
 fetchAndDisplayDevices(_app);
 }
-function onPairFailed() {
+function onPairFailed(data) {
 if (!_wizard || !_wizard.classList.contains("open")) return;
 _scanning = false; hideBadge();
+if (data && data.status === "key_mismatch") {
+setStatus('<span style="color:#c0392b">' + (data.message || _app.i18nText("popup.pair_key_mismatch","Device found but has a different system key. Factory reset the device and try again.")) + '</span>');
+} else {
 setStatus(_app.i18nText("popup.pair_timeout","No device found."));
+}
 showRetry();
 }
 function startCapture(deviceId) {
