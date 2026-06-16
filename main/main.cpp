@@ -98,8 +98,8 @@ extern "C" void app_main(void)
         Helpers::WifiProvision::StartAP();
 #if CONFIG_OLED_ENABLED
         oled_show_status("WiFi:io-rts-setup");
-#endif
         int oled_tick = 0;
+#endif
         while (true) {
             vTaskDelay(pdMS_TO_TICKS(1000));
 #if CONFIG_OLED_ENABLED
