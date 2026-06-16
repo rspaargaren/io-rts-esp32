@@ -102,6 +102,7 @@ tools/console_probe.py
 
 # Local implementation prompts (kept out of repo)
 *-prompt.md
+prompts/
 node_modules
 package-lock.json
 web_data_v2/version.json
