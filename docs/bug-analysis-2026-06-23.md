@@ -106,20 +106,23 @@ Opens a 30-second window where any physical button press binds a remote to a dev
 **Fix:** Add `ota_check_key`.  
 **Fixed (2026-06-23):** `ota_check_key` added to `api_capture_start_post` and `api_capture_cancel_post`.
 
-### H-11 — `sDeviceMap` written without `sMutex` in AddDevice/DeleteDevice/RestoreDevice ★ ❌
+### H-11 — `sDeviceMap` written without `sMutex` in AddDevice/DeleteDevice/RestoreDevice ★ ✅
 **Firmware C++ · IoHomeControl.cpp:795–841**  
 `AddDevice`, `DeleteDevice`, and `RestoreDevice` insert into and modify `sDeviceMap` without holding `sMutex`. `UpdateDevicesStatusTask` simultaneously iterates the map. Concurrent insertions can corrupt the red-black tree causing memory corruption or undefined behaviour.  
-**Fix:** Acquire `sMutex` at the start of each of these methods.
+**Fix:** Acquire `sMutex` at the start of each of these methods.  
+**Fixed (2026-06-23):** `DeleteDevice` and `RestoreDevice` now take `sMutex` around all `sDeviceMap` access. `AddDevice` was intentionally left without an internal lock — it is only ever reached via `UpdateDeviceStatus` in passive mode, and every caller of `UpdateDeviceStatus` in passive mode already holds `sMutex`; adding a second take would deadlock.
 
-### H-12 — `UpdateDevicesStatusTask` reads `sDeviceMap` without `sMutex` ★ ❌
+### H-12 — `UpdateDevicesStatusTask` reads `sDeviceMap` without `sMutex` ★ ✅
 **Firmware C++ · IoHomeControl.cpp:730–787**  
 The outer device loop reads `is_deleted`, timestamps, and `info.name` without any lock. `ProcessReceivedFrameTask` writes these fields under `sMutex`. Data race on all accessed `IoDevice` fields.  
-**Fix:** Take `sMutex` before the outer loop, or snapshot the list under the mutex.
+**Fix:** Take `sMutex` before the outer loop, or snapshot the list under the mutex.  
+**Fixed (2026-06-23):** The outer loop now takes a brief mutex-protected snapshot of device IDs at the start of each cycle. For each device it then takes `sMutex` to read condition fields (`is_deleted`, timestamps, name, type) into locals, releases, calls `DeviceGetName`/`DeviceGetGeneralInfo2` (self-locking), then takes `sMutex` again for `SendAndReceive`. The map is never iterated without the mutex.
 
-### H-13 — `ProcessReceivedFrameTask` holds `sMutex` during 500 ms blocking queue wait ★ ❌
+### H-13 — `ProcessReceivedFrameTask` holds `sMutex` during 500 ms blocking queue wait ★ ✅
 **Firmware C++ · IoHomeControl.cpp:563–714 | Protocol · IoHomeControl.cpp:563–714**  
 `sMutex` is acquired at line 563 and immediately passed to a 500 ms blocking `xQueueReceive`. All device-command operations (`SetDevicePosition`, HTTP handlers, status updates) are starved for up to 500 ms per cycle. In the passive key-sniff path, three sequential 500 ms waits under the mutex create a 1.5 s stall.  
-**Fix:** Use non-blocking `xQueueReceive` inside the locked section, or release the mutex while waiting for frames.
+**Fix:** Use non-blocking `xQueueReceive` inside the locked section, or release the mutex while waiting for frames.  
+**Fixed (2026-06-23):** The 500 ms wait for the first frame now happens before taking `sMutex`, so other tasks have free mutex access during idle periods. Once a frame arrives, the mutex is taken and remaining queued frames are drained with a non-blocking (timeout=0) receive. The inner key-sniff sequence (`CMD_KEY_INIT_TRANSFER` → challenge → key-transfer, each with 500 ms waits) is unchanged and stays fully under the mutex — those three frames must be captured atomically so no other task consumes them from the queue.
 
 ### H-14 — IV construction bug in `create_key_transfer` silently corrupts all pairing as initiator ❌
 **Protocol · io-homecontrol/protocol/iohome_commands.cpp:315**  
@@ -370,7 +373,7 @@ The device-role pairing sequence (M-15) has the controller and device roles reve
 
 1. ~~**C-1, C-2**~~ — C-2 fixed; C-1 intentionally open (bootstrap).
 2. ~~**H-1, H-5, H-6, H-8, H-9, H-10**~~ — Auth sweep complete. **H-7** (WebSocket) deferred.
-3. **H-11, H-12, H-13** — Mutex correctness: `sDeviceMap` races and mutex-under-queue-wait.
+3. ~~**H-11, H-12, H-13**~~ — Mutex correctness: all fixed.
 4. **H-14** — IV construction in `create_key_transfer` (silent pairing failure).
 5. **H-15** — `DeviceGetBattery` physically moves screens.
 6. **M-15** — `PairAsDevice` role reversal (feature has never worked).
