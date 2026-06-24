@@ -561,26 +561,17 @@ namespace iohome
   {
     for (;;)
     {
-      // Wait for first frame WITHOUT holding sMutex — other tasks (SetDevicePosition, HTTP handlers)
-      // can acquire the mutex freely during idle periods between frames.
-      RxFrameQueueItem item;
-      if (!xQueueReceive(sRxIoQueue, &item, RECEIVED_IO_TREATMENT_WAIT_TICKS))
-        continue;
-
       if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
       {
-        // Auto-stop key sniffing after timeout
-        if (sSniffKeyActive && (esp_timer_get_time() - sSniffStartUs) > KEY_SNIFF_TIMEOUT_US)
+        RxFrameQueueItem item;
+        if (xQueueReceive(sRxIoQueue, &item, RECEIVED_IO_TREATMENT_WAIT_TICKS))
         {
-          sSniffKeyActive = false;
-          IO_LOGI("Key sniffing timed out after 120 s");
-        }
-        // Process first frame, then drain any additional queued frames non-blocking.
-        // Inner sniff sequence (CMD_KEY_INIT_TRANSFER) keeps its own 500ms waits under the mutex
-        // to atomically capture challenge + key-transfer frames without another task consuming them.
-        do
-        {
-          // Process frame internally (discovery, authentication, status, ...)
+          // Auto-stop key sniffing after timeout
+          if (sSniffKeyActive && (esp_timer_get_time() - sSniffStartUs) > KEY_SNIFF_TIMEOUT_US)
+          {
+            sSniffKeyActive = false;
+            IO_LOGI("Key sniffing timed out after 120 s");
+          }
           std::string dstDevice = buffToHexString(NODE_ID_SIZE, item.frame.dest_node);
           std::string srcDevice = buffToHexString(NODE_ID_SIZE, item.frame.src_node);
           switch (item.frame.command_id)
@@ -720,9 +711,7 @@ namespace iohome
           break;
           }
         }
-        while (xQueueReceive(sRxIoQueue, &item, 0)); // drain any additional queued frames non-blocking
         xSemaphoreGive(sMutex);
-        vTaskDelay(pdMS_TO_TICKS(5)); // yield so other tasks (SetDevicePosition, HTTP handlers) can run
       }
       else
       {
