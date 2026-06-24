@@ -2340,9 +2340,12 @@ static std::string overkiz_url_encode(const std::string &s)
 }
 
 struct OverkizCtx {
-    std::string body;
+    char *body = nullptr;
+    size_t body_len = 0;
+    size_t body_cap = 0;
     std::string session_cookie;
     bool capture_cookie = false;
+    ~OverkizCtx() { free(body); }
 };
 
 static esp_err_t overkiz_http_event(esp_http_client_event_t *evt)
@@ -2358,8 +2361,10 @@ static esp_err_t overkiz_http_event(esp_http_client_event_t *evt)
             }
         }
     } else if (evt->event_id == HTTP_EVENT_ON_DATA) {
-        if (ctx->body.size() < 131072)
-            ctx->body.append(static_cast<const char *>(evt->data), evt->data_len);
+        if (ctx->body && ctx->body_len + (size_t)evt->data_len < ctx->body_cap) {
+            memcpy(ctx->body + ctx->body_len, evt->data, evt->data_len);
+            ctx->body_len += evt->data_len;
+        }
     }
     return ESP_OK;
 }
@@ -2401,6 +2406,18 @@ static std::string overkiz_get(const std::string &cookie, const std::string &pat
     OverkizCtx ctx;
     ctx.capture_cookie = false;
 
+    // Allocate a fixed-size buffer using an explicit malloc so OOM is a graceful failure
+    // (operator new on ESP32 with exceptions disabled calls abort() on failure).
+    // Use at most half the free heap, capped at 64 KB.
+    size_t free_heap = esp_get_free_heap_size();
+    size_t cap = std::min(free_heap / 2, (size_t)(64 * 1024));
+    ctx.body = (char *)malloc(cap + 1);
+    if (!ctx.body) {
+        ESP_LOGW(TAG, "overkiz_get: OOM allocating body buffer (%zu free)", free_heap);
+        return "";
+    }
+    ctx.body_cap = cap;
+
     esp_http_client_config_t cfg = {};
     cfg.url               = url.c_str();
     cfg.method            = HTTP_METHOD_GET;
@@ -2420,7 +2437,9 @@ static std::string overkiz_get(const std::string &cookie, const std::string &pat
         ESP_LOGW(TAG, "overkiz_get %s: err=%s status=%d", path.c_str(), esp_err_to_name(err), status);
         return "";
     }
-    return ctx.body;
+    if (ctx.body_len == 0) return "";
+    ctx.body[ctx.body_len] = '\0';
+    return std::string(ctx.body, ctx.body_len);  // ctx destructor frees ctx.body
 }
 
 static std::string overkiz_get_devices(const std::string &cookie)
@@ -2459,6 +2478,7 @@ static esp_err_t api_somfy_import_post(httpd_req_t *req)
     }
 
     cJSON *src = cJSON_Parse(json_str.c_str());
+    std::string().swap(json_str);  // free raw buffer now; cJSON has its own copy
     if (!cJSON_IsArray(src)) {
         cJSON_Delete(src);
         send_result(req, false, "Unexpected response format from Somfy cloud");
