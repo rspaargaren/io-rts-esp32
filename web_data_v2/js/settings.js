@@ -222,6 +222,15 @@
         }
     }
 
+    function setNetworkStaticDisabled(app, disabled) {
+        app.elements.netStaticFields.style.opacity       = disabled ? "0.45" : "1";
+        app.elements.netStaticFields.style.pointerEvents = disabled ? "none"  : "";
+        [app.elements.netIp, app.elements.netMask, app.elements.netGateway,
+         app.elements.netDns1, app.elements.netSntp].forEach(function (el) {
+            el.disabled = disabled;
+        });
+    }
+
     async function loadNetworkConfig(app) {
         try {
             const r = await window.MiOpenApi.requestJson("/api/network/config");
@@ -229,7 +238,7 @@
             var isDhcp = r.dhcp !== false;
             app.elements.netDhcp.checked = isDhcp;
             app.elements.netDhcpToggle.classList.toggle("on", isDhcp);
-            app.elements.netStaticFields.style.display = isDhcp ? "none" : "flex";
+            setNetworkStaticDisabled(app, isDhcp);
             app.elements.netIp.value      = r.ip      || "";
             app.elements.netMask.value    = r.mask    || "";
             app.elements.netGateway.value = r.gateway || "";
@@ -274,8 +283,9 @@
 
         app.elements.netDhcpToggle.addEventListener("click", function () {
             app.elements.netDhcp.checked = !app.elements.netDhcp.checked;
-            app.elements.netDhcpToggle.classList.toggle("on", app.elements.netDhcp.checked);
-            app.elements.netStaticFields.style.display = app.elements.netDhcp.checked ? "none" : "flex";
+            var isDhcp = app.elements.netDhcp.checked;
+            app.elements.netDhcpToggle.classList.toggle("on", isDhcp);
+            setNetworkStaticDisabled(app, isDhcp);
         });
 
         g("net-config-save").addEventListener("click", function () { saveNetworkConfig(app); });
