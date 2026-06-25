@@ -123,7 +123,7 @@
         <div class="settings-group-label">Network</div>
         <div class="settings-card">
           <!-- WiFi SSID -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="wifi" style="flex-direction:column;align-items:stretch;gap:8px;">
             <div style="display:flex;align-items:center;justify-content:space-between;">
               <span class="row-label">WiFi</span>
               <span class="row-status connected" id="fallback-status"></span>
@@ -149,7 +149,8 @@
             <p class="restart-notice">⚠ Device will restart after saving.</p>
           </div>
           <!-- Hostname & IP -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="network" style="flex-direction:column;align-items:stretch;gap:8px;">
+            <span class="row-label">Network</span>
             <div style="display:flex;gap:6px;align-items:flex-end;">
               <div style="flex:2">
                 <label style="font-size:11px;color:var(--text3);">Hostname</label>
@@ -191,7 +192,7 @@
             <p class="restart-notice">⚠ Device will restart after saving.</p>
           </div>
           <!-- Fallback AP -->
-          <div class="settings-row">
+          <div class="settings-row" data-help="fallback-ap">
             <span class="row-label">Fallback AP</span>
             <div class="row-right">
               <div class="s-toggle on" id="fallback-toggle"></div>
@@ -240,7 +241,7 @@
         <div class="settings-group-label">Integration</div>
         <div class="settings-card">
           <!-- MQTT -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="mqtt" style="flex-direction:column;align-items:stretch;gap:8px;">
             <div style="display:flex;align-items:center;justify-content:space-between;">
               <span class="row-label">MQTT</span>
               <div style="display:flex;align-items:center;gap:8px;">
@@ -286,7 +287,7 @@
             <button class="s-btn primary" id="mqtt-update">Save MQTT</button>
           </div>
           <!-- Syslog -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="syslog" style="flex-direction:column;align-items:stretch;gap:8px;">
             <div style="display:flex;align-items:center;justify-content:space-between;">
               <span class="row-label">Syslog</span>
               <div style="display:flex;align-items:center;gap:8px;">
@@ -327,7 +328,7 @@
             <button class="s-btn primary" id="syslog-update">Save Syslog</button>
           </div>
           <!-- Somfy / Overkiz -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="somfy" style="flex-direction:column;align-items:stretch;gap:8px;">
             <span class="row-label">Somfy / Overkiz</span>
             <div>
               <label style="font-size:11px;color:var(--text3);">Somfy account email</label>
@@ -351,7 +352,7 @@
         <div class="settings-group-label">Security</div>
         <div class="settings-card">
           <!-- Controller identity -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="controller" style="flex-direction:column;align-items:stretch;gap:8px;">
             <span class="row-label">Controller Identity</span>
             <div style="display:flex;gap:6px;align-items:center;">
               <div style="flex:1;">
@@ -371,7 +372,7 @@
             <button class="s-btn primary" id="io-config-save">Save Controller Settings</button>
           </div>
           <!-- IO key -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="io-key" style="flex-direction:column;align-items:stretch;gap:8px;">
             <span class="row-label">IO System Key</span>
             <div class="sensitive-notice">Changing this key makes all paired devices unreachable until reboot.</div>
             <div style="display:flex;gap:6px;align-items:center;">
@@ -386,7 +387,7 @@
             <span class="field-status" id="io-key-status"></span>
           </div>
           <!-- OTA key -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="ota-key" style="flex-direction:column;align-items:stretch;gap:8px;">
             <span class="row-label">OTA Key</span>
             <div style="display:flex;gap:6px;align-items:center;">
               <input type="text" id="ota-key-display" class="s-input key-display" readonly style="flex:1;font-size:11px;">
@@ -436,7 +437,7 @@
             <span id="ota-web-status" class="field-status"></span>
           </div>
           <!-- Backup / Restore -->
-          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+          <div class="settings-row" data-help="backup" style="flex-direction:column;align-items:stretch;gap:8px;">
             <span class="row-label">Backup / Restore</span>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
               <button class="s-btn" id="backup-export">Export Backup</button>
@@ -759,6 +760,7 @@
 <script src="js/ota.js"></script>
 <script src="js/updater.js"></script>
 <script src="js/app.js"></script>
+<script src="js/help.js"></script>
 
 <script>
 // View switcher with scroll position memory
