@@ -1,6 +1,7 @@
 #include "web_server.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_littlefs.h"
 #include "esp_random.h"
@@ -1703,6 +1704,30 @@ static esp_err_t api_network_config_get(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "dns1",     Config::NetworkConfig::GetMainDNSAddress().c_str());
     cJSON_AddStringToObject(obj, "dns2",     Config::NetworkConfig::GetBackupDNSAddress().c_str());
     cJSON_AddStringToObject(obj, "sntp",     Config::NetworkConfig::GetSNTPAddress().c_str());
+
+    // Actual runtime IP (from DHCP lease or active static config)
+    char actual_ip[16] = "0.0.0.0", actual_mask[16] = "0.0.0.0";
+    char actual_gw[16] = "0.0.0.0", actual_dns1[16] = "0.0.0.0";
+    const char *netif_keys[] = {"WIFI_STA_DEF", "ETH_DEF", nullptr};
+    for (int i = 0; netif_keys[i]; i++) {
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey(netif_keys[i]);
+        if (!netif) continue;
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+            esp_ip4addr_ntoa(&ip_info.ip,      actual_ip,   sizeof(actual_ip));
+            esp_ip4addr_ntoa(&ip_info.netmask, actual_mask, sizeof(actual_mask));
+            esp_ip4addr_ntoa(&ip_info.gw,      actual_gw,   sizeof(actual_gw));
+        }
+        esp_netif_dns_info_t dns_info;
+        if (esp_netif_get_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns_info) == ESP_OK)
+            esp_ip4addr_ntoa(&dns_info.ip.u_addr.ip4, actual_dns1, sizeof(actual_dns1));
+        break;
+    }
+    cJSON_AddStringToObject(obj, "actual_ip",      actual_ip);
+    cJSON_AddStringToObject(obj, "actual_mask",    actual_mask);
+    cJSON_AddStringToObject(obj, "actual_gateway", actual_gw);
+    cJSON_AddStringToObject(obj, "actual_dns1",    actual_dns1);
+
     send_json(req, obj);
     return ESP_OK;
 }

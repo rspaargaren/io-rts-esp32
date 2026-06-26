@@ -239,11 +239,26 @@
             app.elements.netDhcp.checked = isDhcp;
             app.elements.netDhcpToggle.classList.toggle("on", isDhcp);
             setNetworkStaticDisabled(app, isDhcp);
-            app.elements.netIp.value      = r.ip      || "";
-            app.elements.netMask.value    = r.mask    || "";
-            app.elements.netGateway.value = r.gateway || "";
-            app.elements.netDns1.value    = r.dns1    || "";
-            app.elements.netSntp.value    = r.sntp    || "";
+            // Store actual DHCP-assigned values so the toggle can pre-fill them
+            app.dhcpActual = {
+                ip:      r.actual_ip      || "0.0.0.0",
+                mask:    r.actual_mask    || "0.0.0.0",
+                gateway: r.actual_gateway || "0.0.0.0",
+                dns1:    r.actual_dns1    || "0.0.0.0"
+            };
+            if (isDhcp) {
+                // Show what the device is actually using
+                app.elements.netIp.value      = app.dhcpActual.ip;
+                app.elements.netMask.value    = app.dhcpActual.mask;
+                app.elements.netGateway.value = app.dhcpActual.gateway;
+                app.elements.netDns1.value    = app.dhcpActual.dns1;
+            } else {
+                app.elements.netIp.value      = r.ip      || "";
+                app.elements.netMask.value    = r.mask    || "";
+                app.elements.netGateway.value = r.gateway || "";
+                app.elements.netDns1.value    = r.dns1    || "";
+            }
+            app.elements.netSntp.value = r.sntp || "";
         } catch (e) { showToast("Failed to load network config.", "error"); }
     }
 
@@ -282,10 +297,18 @@
         app.elements.netSntp        = g("net-sntp");
 
         app.elements.netDhcpToggle.addEventListener("click", function () {
-            app.elements.netDhcp.checked = !app.elements.netDhcp.checked;
+            var wasDhcp = app.elements.netDhcp.checked;
+            app.elements.netDhcp.checked = !wasDhcp;
             var isDhcp = app.elements.netDhcp.checked;
             app.elements.netDhcpToggle.classList.toggle("on", isDhcp);
             setNetworkStaticDisabled(app, isDhcp);
+            // Switching DHCP → static: pre-fill fields with the live DHCP values
+            if (wasDhcp && !isDhcp && app.dhcpActual) {
+                app.elements.netIp.value      = app.dhcpActual.ip;
+                app.elements.netMask.value    = app.dhcpActual.mask;
+                app.elements.netGateway.value = app.dhcpActual.gateway;
+                app.elements.netDns1.value    = app.dhcpActual.dns1;
+            }
         });
 
         g("net-config-save").addEventListener("click", function () { saveNetworkConfig(app); });
