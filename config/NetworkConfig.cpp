@@ -154,11 +154,13 @@ namespace Config
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
     bool NetworkConfig::HasWifiCredentials()
     {
-        // Returns true only if the SSID key exists in NVS (was set by the user or provisioning).
-        // A fresh device (key absent) or an explicitly wiped device (key deleted) returns false.
+        // Check NVS first (set by provisioning or CLI)
         std::string ssid;
-        return NvsHelpers::GetString(NETWORK_CONFIG_NAMESPACE, NETWORK_CONFIG_WIFI_SSID, ssid) == ESP_OK
-               && !ssid.empty();
+        if (NvsHelpers::GetString(NETWORK_CONFIG_NAMESPACE, NETWORK_CONFIG_WIFI_SSID, ssid) == ESP_OK
+            && !ssid.empty()) return true;
+        // Fall back to compile-time default from sdkconfig
+        ssid = CONFIG_ESP_WIFI_SSID;
+        return !ssid.empty() && ssid != "myssid";
     }
 
     void NetworkConfig::DeleteWifiConfig()

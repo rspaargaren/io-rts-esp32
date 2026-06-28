@@ -90,6 +90,9 @@ extern "C" void app_main(void)
     // rollback when provisioning mode is entered (web server never starts).
     esp_ota_mark_app_valid_cancel_rollback();
 
+    // Initialize commands line tools (available even in provisioning AP mode)
+    init_cmdline(nullptr);
+
     // Check WiFi credentials — branch into provisioning AP if missing
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
     if (!Config::NetworkConfig::HasWifiCredentials())
@@ -100,6 +103,8 @@ extern "C" void app_main(void)
         oled_show_status("WiFi:io-rts-setup");
         int oled_tick = 0;
 #endif
+        // CLI is already active via init_cmdline(nullptr) above;
+        // use serial commands 'config_wifi --ssid=... --pwd=...' then 'reboot'
         while (true) {
             vTaskDelay(pdMS_TO_TICKS(1000));
 #if CONFIG_OLED_ENABLED
@@ -139,8 +144,9 @@ extern "C" void app_main(void)
     web_server_start(&ioRtsManager);
 #endif
 
-    // Initialize commands line tools
-    init_cmdline(&ioRtsManager);
+    // Register IO command handlers with the real manager (CLI was started
+    // earlier with nullptr so it works even in provisioning AP mode).
+    register_io_cmdline_tools(&ioRtsManager);
 
 #if CONFIG_OLED_ENABLED
     oled_show_status("Ready");
