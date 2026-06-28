@@ -469,5 +469,7 @@
   "status.remote_already_linked": "Deze afstandsbediening is al gekoppeld — bestaande koppelingen worden bewerkt.",
   "status.link_partial_fail": "Sommige apparaten konden niet worden gekoppeld: {ids}. De afstandsbediening is mogelijk gedeeltelijk gekoppeld.",
   "status.remote_id_invalid": "Moet exact 6 hexadecimale tekens zijn (0–9, A–F).",
-  "confirm.delete_remote": "Afstandsbediening {id} van alle apparaten verwijderen?"
+  "confirm.delete_remote": "Afstandsbediening {id} van alle apparaten verwijderen?",
+  "label.quiet_mode": "Stille modus",
+  "popup.quiet_desc": "Langzamere, stillere motorwerking."
 }

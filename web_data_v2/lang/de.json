@@ -468,5 +468,7 @@
   "status.remote_already_linked": "Diese Fernbedienung ist bereits verknüpft — bestehende Verknüpfungen werden bearbeitet.",
   "status.link_partial_fail": "Einige Geräte konnten nicht verknüpft werden: {ids}. Die Fernbedienung ist möglicherweise teilweise verknüpft.",
   "status.remote_id_invalid": "Muss genau 6 Hexadezimalzeichen sein (0–9, A–F).",
-  "confirm.delete_remote": "Fernbedienung {id} von allen Geräten entfernen?"
+  "confirm.delete_remote": "Fernbedienung {id} von allen Geräten entfernen?",
+  "label.quiet_mode": "Leiser Modus",
+  "popup.quiet_desc": "Langsamerer, leiserer Motorlauf."
 }

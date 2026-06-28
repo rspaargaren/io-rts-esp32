@@ -382,5 +382,7 @@
   "status.remote_already_linked": "This remote is already linked — editing existing links.",
   "status.link_partial_fail": "Some devices could not be linked: {ids}. The remote may be partially linked.",
   "status.remote_id_invalid": "Must be exactly 6 hex characters (0–9, A–F).",
-  "confirm.delete_remote": "Remove remote {id} from all devices?"
+  "confirm.delete_remote": "Remove remote {id} from all devices?",
+  "label.quiet_mode": "Quiet mode",
+  "popup.quiet_desc": "Slower, quieter motor operation."
 }
