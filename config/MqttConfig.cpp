@@ -35,7 +35,7 @@ namespace Config
     bool MqttConfig::isEnabled()
     {
 #ifdef CONFIG_MQTT_CLIENT_ENABLE
-        uint8_t is_enabled = 1;
+        uint8_t is_enabled = 0;
 #else
         uint8_t is_enabled = 0;
 #endif
