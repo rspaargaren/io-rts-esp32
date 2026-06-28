@@ -314,6 +314,25 @@ app.i18nText("popup.invert_desc", "Swap which end counts as fully open."),
 invertToggle
 ));
 }
+if (hasPos) {
+var quietToggle = document.createElement("div");
+quietToggle.className = "s-toggle" + (device.is_quiet ? " on" : "");
+quietToggle.onclick = function () {
+var newVal = !device.is_quiet;
+window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "setQuiet", value: newVal })
+.then(function (r) {
+if (!r.success) { showToast(r.message || "Quiet mode failed.", "error"); return; }
+device.is_quiet = newVal;
+quietToggle.classList.toggle("on", device.is_quiet);
+})
+.catch(function (e) { showToast(e.message, "error"); });
+};
+body.appendChild(devRow(
+app.i18nText("label.quiet_mode", "Quiet mode"),
+app.i18nText("popup.quiet_desc", "Slower, quieter motor operation."),
+quietToggle
+));
+}
 if (hasFav) {
 var favPos = getFavPos(device.id);
 var favSub = favPos !== null ? "Currently: " + favPos + "%" : "No favorite set.";

@@ -64,6 +64,7 @@ namespace Helpers
         cJSON_AddBoolToObject(obj, "open_close_inverted", dev.info.is_openclose_inverted);
         cJSON_AddBoolToObject(obj, "is_low_power",        dev.info.is_low_power);
         cJSON_AddNumberToObject(obj, "transit_ms", sd.transit_time_ms);
+        cJSON_AddBoolToObject(obj, "quiet", sd.quiet);
 
         cJSON *remotes = cJSON_AddArrayToObject(obj, "remotes");
         if (remotes)
@@ -134,6 +135,9 @@ namespace Helpers
 
         cJSON *transitItem = cJSON_GetObjectItem(obj, "transit_ms");
         sd.transit_time_ms = cJSON_IsNumber(transitItem) ? (uint32_t)transitItem->valuedouble : 0;
+
+        cJSON *quietItem = cJSON_GetObjectItem(obj, "quiet");
+        sd.quiet = cJSON_IsBool(quietItem) ? cJSON_IsTrue(quietItem) : false;
 
         sd.linked_remotes.clear();
         cJSON *remotesArr = cJSON_GetObjectItem(obj, "remotes");

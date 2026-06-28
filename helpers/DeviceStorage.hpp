@@ -16,6 +16,7 @@ namespace Helpers
         iohome::IoDevice device;               // Device information
         std::list<std::string> linked_remotes; // Remote IDs linked to this device
         uint32_t transit_time_ms = 0;          // Time to travel full range (0 = uncalibrated)
+        bool quiet = false;                    // Slower, quieter motor operation
     };
 
     class DeviceStorage

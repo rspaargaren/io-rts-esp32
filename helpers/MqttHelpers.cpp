@@ -473,11 +473,25 @@ namespace Helpers
                             {
                                 if (command.compare("CLOSE") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->CloseDevice(deviceID);
+                                    bool quiet = false;
+                                    {
+                                        std::lock_guard<std::mutex> guard(mqttHelper->GetIoRtsManager()->mIoDevicesMutex);
+                                        auto it = mqttHelper->GetIoRtsManager()->mIoDevices.find(deviceID);
+                                        if (it != mqttHelper->GetIoRtsManager()->mIoDevices.end())
+                                            quiet = it->second.quiet;
+                                    }
+                                    mqttHelper->GetIoRtsManager()->mIoHome->CloseDevice(deviceID, quiet);
                                 }
                                 else if (command.compare("OPEN") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->OpenDevice(deviceID);
+                                    bool quiet = false;
+                                    {
+                                        std::lock_guard<std::mutex> guard(mqttHelper->GetIoRtsManager()->mIoDevicesMutex);
+                                        auto it = mqttHelper->GetIoRtsManager()->mIoDevices.find(deviceID);
+                                        if (it != mqttHelper->GetIoRtsManager()->mIoDevices.end())
+                                            quiet = it->second.quiet;
+                                    }
+                                    mqttHelper->GetIoRtsManager()->mIoHome->OpenDevice(deviceID, quiet);
                                 }
                                 else if (command.compare("STOP") == 0)
                                 {

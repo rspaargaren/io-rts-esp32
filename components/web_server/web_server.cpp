@@ -414,6 +414,7 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddBoolToObject(obj, "is_low_power",  dev.info.is_low_power);
         cJSON_AddBoolToObject(obj, "is_stopped",    dev.is_stopped);
         cJSON_AddBoolToObject(obj, "is_inverted",   dev.info.is_openclose_inverted);
+        cJSON_AddBoolToObject(obj, "is_quiet",      dev.quiet);
         cJSON_AddBoolToObject(obj, "tilt_supported",
             iohome::deviceTypeSupportsTilt(dev.info.device_type));
 
@@ -501,7 +502,11 @@ static esp_err_t api_action_post(httpd_req_t *req)
     bool ok = false;
 
     if (strcmp(action, "open") == 0) {
-        ok = s_manager->mIoHome->OpenDevice(deviceId);
+        s_manager->mIoDevicesMutex.lock();
+        auto qit = s_manager->mIoDevices.find(deviceId);
+        bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
+        s_manager->mIoDevicesMutex.unlock();
+        ok = s_manager->mIoHome->OpenDevice(deviceId, quiet);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
@@ -511,7 +516,11 @@ static esp_err_t api_action_post(httpd_req_t *req)
             s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
         }
     } else if (strcmp(action, "close") == 0) {
-        ok = s_manager->mIoHome->CloseDevice(deviceId);
+        s_manager->mIoDevicesMutex.lock();
+        auto qit = s_manager->mIoDevices.find(deviceId);
+        bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
+        s_manager->mIoDevicesMutex.unlock();
+        ok = s_manager->mIoHome->CloseDevice(deviceId, quiet);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
@@ -524,7 +533,11 @@ static esp_err_t api_action_post(httpd_req_t *req)
         ok = s_manager->mIoHome->StopDevice(deviceId);
         if (ok) s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f); // poll soon after stop
     } else if (strcmp(action, "position") == 0 && value >= 0 && value <= 100) {
-        ok = s_manager->mIoHome->SetDevicePosition(deviceId, (uint8_t)value);
+        s_manager->mIoDevicesMutex.lock();
+        auto qit = s_manager->mIoDevices.find(deviceId);
+        bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
+        s_manager->mIoDevicesMutex.unlock();
+        ok = s_manager->mIoHome->SetDevicePosition(deviceId, (uint8_t)value, quiet);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
@@ -540,6 +553,12 @@ static esp_err_t api_action_post(httpd_req_t *req)
     } else if (strcmp(action, "invertOpenClose") == 0) {
         s_manager->mIoHome->InvertOpenClosePositionForDevice(deviceId);
         ok = true;
+    } else if (strcmp(action, "setQuiet") == 0) {
+        cJSON *jVal = cJSON_GetObjectItem(json, "value");
+        if (cJSON_IsBool(jVal))
+            ok = s_manager->SetQuiet(deviceId, cJSON_IsTrue(jVal));
+        else
+            ok = false;
     } else if (strcmp(action, "rename") == 0) {
         cJSON *jName = cJSON_GetObjectItem(json, "value");
         const char *newName = cJSON_IsString(jName) ? jName->valuestring : "";

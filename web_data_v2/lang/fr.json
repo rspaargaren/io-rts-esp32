@@ -468,5 +468,7 @@
   "status.remote_already_linked": "Cette télécommande est déjà liée — modification des liens existants.",
   "status.link_partial_fail": "Certains appareils n'ont pas pu être liés : {ids}. La télécommande est peut-être partiellement liée.",
   "status.remote_id_invalid": "Doit contenir exactement 6 caractères hexadécimaux (0–9, A–F).",
-  "confirm.delete_remote": "Supprimer la télécommande {id} de tous les appareils ?"
+  "confirm.delete_remote": "Supprimer la télécommande {id} de tous les appareils ?",
+  "label.quiet_mode": "Mode silencieux",
+  "popup.quiet_desc": "Fonctionnement moteur plus lent et silencieux."
 }
