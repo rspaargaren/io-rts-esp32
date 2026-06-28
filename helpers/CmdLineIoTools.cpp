@@ -313,6 +313,7 @@ static void register_iodeleteinactive(void)
 static struct
 {
     struct arg_str *device_id;
+    struct arg_lit *quiet;
     struct arg_end *end;
 } ioopen_args;
 
@@ -324,13 +325,14 @@ static int do_ioopen_cmd(int argc, char **argv)
         arg_print_errors(stderr, ioopen_args.end, argv[0]);
         return 1;
     }
-    sIoHome->OpenDevice(ioopen_args.device_id->sval[0]);
+    sIoHome->OpenDevice(ioopen_args.device_id->sval[0], ioopen_args.quiet->count > 0);
     return 0;
 }
 
 void register_ioopen(void)
 {
     ioopen_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device, 3 bytes (eg 112233)");
+    ioopen_args.quiet = arg_lit0(NULL, "quiet", "Quiet mode (slower, quieter operation)");
     ioopen_args.end = arg_end(1);
 
     const esp_console_cmd_t ioopen_cmd = {
@@ -351,6 +353,7 @@ void register_ioopen(void)
 static struct
 {
     struct arg_str *device_id;
+    struct arg_lit *quiet;
     struct arg_end *end;
 } ioclose_args;
 
@@ -362,13 +365,14 @@ static int do_ioclose_cmd(int argc, char **argv)
         arg_print_errors(stderr, ioclose_args.end, argv[0]);
         return 1;
     }
-    sIoHome->CloseDevice(ioclose_args.device_id->sval[0]);
+    sIoHome->CloseDevice(ioclose_args.device_id->sval[0], ioclose_args.quiet->count > 0);
     return 0;
 }
 
 void register_ioclose(void)
 {
     ioclose_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device, 3 bytes (eg 112233)");
+    ioclose_args.quiet = arg_lit0(NULL, "quiet", "Quiet mode (slower, quieter operation)");
     ioclose_args.end = arg_end(1);
 
     const esp_console_cmd_t ioclose_cmd = {
