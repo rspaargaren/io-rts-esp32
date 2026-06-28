@@ -23,9 +23,16 @@ if (t === "ON_OFF_SWITCH") return "switch";
 if (t === "LIGHT") return device.subtype === 58 ? "switch" : "dimmer";
 return "readonly";
 }
-async function runAction(app, deviceId, action, value) {
+function isQuiet(deviceId) {
+return localStorage.getItem("io_quiet_" + deviceId) === "1";
+}
+function setQuiet(deviceId, val) {
+localStorage.setItem("io_quiet_" + deviceId, val ? "1" : "0");
+}
+async function runAction(app, deviceId, action, value, quiet) {
 const payload = { deviceId: deviceId, action: action };
 if (value !== undefined) payload.value = value;
+if (quiet) payload.quiet = true;
 const result = await window.MiOpenApi.postJson("/api/action", payload);
 if (result.success === false) {
 markUnreachable(deviceId);
@@ -165,10 +172,10 @@ btn.title = fav !== null ? ("Favorite: " + fav + "%") : "No favorite set";
 function buildControls(app, device, li, group) {
 if (group === "shutter" || group === "venetian" || group === "window") {
 li.appendChild(makeRow([
-makeBtn("↑", function () { runAction(app, device.id, "open").catch(function (e) { showToast(e.message, "error"); }); }),
-makeBtn("■", function () { runAction(app, device.id, "stop").catch(function (e) { showToast(e.message, "error"); }); }),
-makeBtn("↓", function () { runAction(app, device.id, "close").catch(function (e) { showToast(e.message, "error"); }); }),
-makeFavBtn(app, device)
+    makeBtn("↑", function () { runAction(app, device.id, "open", undefined, isQuiet(device.id)).catch(function (e) { showToast(e.message, "error"); }); }),
+    makeBtn("■", function () { runAction(app, device.id, "stop").catch(function (e) { showToast(e.message, "error"); }); }),
+    makeBtn("↓", function () { runAction(app, device.id, "close", undefined, isQuiet(device.id)).catch(function (e) { showToast(e.message, "error"); }); }),
+    makeFavBtn(app, device)
 ]));
 li.appendChild(makeSlider(app, device, "position", device.position));
 if (group === "venetian") {
@@ -176,8 +183,8 @@ li.appendChild(makeSlider(app, device, "tilt", device.tilt));
 }
 } else if (group === "gate") {
 li.appendChild(makeRow([
-makeBtn("↑", function () { runAction(app, device.id, "open").catch(function (e) { showToast(e.message, "error"); }); }),
-makeBtn("↓", function () { runAction(app, device.id, "close").catch(function (e) { showToast(e.message, "error"); }); })
+    makeBtn("↑", function () { runAction(app, device.id, "open", undefined, isQuiet(device.id)).catch(function (e) { showToast(e.message, "error"); }); }),
+    makeBtn("↓", function () { runAction(app, device.id, "close", undefined, isQuiet(device.id)).catch(function (e) { showToast(e.message, "error"); }); })
 ]));
 } else if (group === "switch" || group === "dimmer") {
 li.appendChild(makeRow([
@@ -296,23 +303,36 @@ posSpan.textContent = device.position >= 0
 body.appendChild(devRow(app.i18nText("popup.device_position", "Position"), null, posSpan));
 }
 if (hasFav) {
-var invertToggle = document.createElement("div");
-invertToggle.className = "s-toggle" + (device.is_inverted ? " on" : "");
-invertToggle.onclick = function () {
-window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "invertOpenClose" })
-.then(function (r) {
-if (!r.success) { showToast(r.message || "Invert failed.", "error"); return; }
-device.is_inverted = !device.is_inverted;
-invertToggle.classList.toggle("on", device.is_inverted);
-showToast(app.i18nText("popup.inverted", "Direction inverted."), "success");
-})
-.catch(function (e) { showToast(e.message, "error"); });
-};
-body.appendChild(devRow(
-app.i18nText("label.invert_openclose", "Invert open/close"),
-app.i18nText("popup.invert_desc", "Swap which end counts as fully open."),
-invertToggle
-));
+    var invertToggle = document.createElement("div");
+    invertToggle.className = "s-toggle" + (device.is_inverted ? " on" : "");
+    invertToggle.onclick = function () {
+        window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "invertOpenClose" })
+        .then(function (r) {
+            if (!r.success) { showToast(r.message || "Invert failed.", "error"); return; }
+            device.is_inverted = !device.is_inverted;
+            invertToggle.classList.toggle("on", device.is_inverted);
+            showToast(app.i18nText("popup.inverted", "Direction inverted."), "success");
+        })
+        .catch(function (e) { showToast(e.message, "error"); });
+    };
+    body.appendChild(devRow(
+        app.i18nText("label.invert_openclose", "Invert open/close"),
+        app.i18nText("popup.invert_desc", "Swap which end counts as fully open."),
+        invertToggle
+    ));
+    // Quiet mode toggle
+    var quietToggle = document.createElement("div");
+    quietToggle.className = "s-toggle" + (isQuiet(device.id) ? " on" : "");
+    quietToggle.onclick = function () {
+        var now = !isQuiet(device.id);
+        setQuiet(device.id, now);
+        quietToggle.classList.toggle("on", now);
+    };
+    body.appendChild(devRow(
+        app.i18nText("label.quiet_mode", "Quiet mode"),
+        app.i18nText("popup.quiet_desc", "Slower, quieter motor operation."),
+        quietToggle
+    ));
 }
 if (hasFav) {
 var favPos = getFavPos(device.id);

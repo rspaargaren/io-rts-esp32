@@ -501,7 +501,10 @@ static esp_err_t api_action_post(httpd_req_t *req)
     bool ok = false;
 
     if (strcmp(action, "open") == 0) {
-        ok = s_manager->mIoHome->OpenDevice(deviceId);
+        bool quiet = false;
+        cJSON *jQuiet = cJSON_GetObjectItem(json, "quiet");
+        if (cJSON_IsBool(jQuiet)) quiet = cJSON_IsTrue(jQuiet);
+        ok = s_manager->mIoHome->OpenDevice(deviceId, quiet);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
@@ -511,7 +514,10 @@ static esp_err_t api_action_post(httpd_req_t *req)
             s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
         }
     } else if (strcmp(action, "close") == 0) {
-        ok = s_manager->mIoHome->CloseDevice(deviceId);
+        bool quiet = false;
+        cJSON *jQuiet = cJSON_GetObjectItem(json, "quiet");
+        if (cJSON_IsBool(jQuiet)) quiet = cJSON_IsTrue(jQuiet);
+        ok = s_manager->mIoHome->CloseDevice(deviceId, quiet);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
