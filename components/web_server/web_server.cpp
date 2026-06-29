@@ -2458,6 +2458,7 @@ static esp_err_t overkiz_get(const std::string &cookie, const std::string &path,
             if (num_bytes == ESP_ERR_HTTP_EAGAIN) continue;
             if (num_bytes < 0) {
                 ESP_LOGE(TAG, "overkiz_get: Error reading data");
+                err = ESP_FAIL;
                 break;
             }
             if (num_bytes == 0) break;
@@ -2471,7 +2472,7 @@ static esp_err_t overkiz_get(const std::string &cookie, const std::string &path,
     esp_http_client_cleanup(client);
     if (err != ESP_OK || status != 200) {
         ESP_LOGW(TAG, "overkiz_get %s: err=%s status=%d", path.c_str(), esp_err_to_name(err), status);
-        return ESP_FAIL;
+        return err;
     }
     return ESP_OK;
 }
@@ -2488,10 +2489,10 @@ static esp_err_t overkiz_get_devices(const std::string &cookie, const std::funct
         switch(evt.type) {
             case EVENT_VALUE:
                 if (evt.path == devicePath) {
-                    if (evt.key == "label") deviceLabel = evt.value->getString();
-                    else if (evt.key == "deviceURL") deviceURL = evt.value->getString();
+                    if (evt.key == "label" && evt.value->isString()) deviceLabel = evt.value->getString();
+                    else if (evt.key == "deviceURL" && evt.value->isString()) deviceURL = evt.value->getString();
                 }
-                if (evt.path == deviceDefinitionPath && evt.key == "type") {
+                if (evt.path == deviceDefinitionPath && evt.key == "type" && evt.value->isString()) {
                     deviceType = evt.value->getString();
                 }
                 break;
@@ -2503,6 +2504,7 @@ static esp_err_t overkiz_get_devices(const std::string &cookie, const std::funct
                     } else {
                         ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url '%s', denied because type is '%s' instead of 'ACTUATOR'", deviceLabel.c_str(), deviceURL.c_str(), deviceType.c_str());
                     }
+                    deviceLabel = deviceURL = deviceType = "";
                 }
                 break;
         }
@@ -2554,7 +2556,7 @@ static esp_err_t api_somfy_import_post(httpd_req_t *req)
     s_manager->mIoDevicesMutex.unlock();
 
     cJSON *result = cJSON_CreateArray();
-    overkiz_get_devices(cookie, [&result, &known](std::string label, std::string url) {
+    auto err = overkiz_get_devices(cookie, [&result, &known](std::string label, std::string url) {
         if (url.compare(0, 5, "io://") != 0) { 
             ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url denied: '%s'", label.c_str(), url.c_str()); 
             return; 
@@ -2564,18 +2566,28 @@ static esp_err_t api_somfy_import_post(httpd_req_t *req)
         auto lastPart = url.substr(lastSlash+1);
         if (lastPart == "") { ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url denied: '%s'", label.c_str(), url.c_str()); return; }
 
-        unsigned long decimal_id = stoul(lastPart, nullptr, 10);
-        if (decimal_id == 0 || decimal_id > 0xFFFFFF) { ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url '%s' denied because of decimal value: %d", label.c_str(), url.c_str(), decimal_id); return; }
+        char *end = nullptr;
+        unsigned long decimal_id = strtoul(lastPart.c_str(), &end, 10);
+        if (*end != '\0' || decimal_id == 0 || decimal_id > 0xFFFFFF ) { 
+            ESP_LOGI(TAG, "overkiz_get_devices: device '%s' with url '%s' denied because of invalid decimal value", label.c_str(), url.c_str()); 
+            return; 
+        }
 
         char hex_id[7];
         snprintf(hex_id, sizeof(hex_id), "%06lX", decimal_id);
 
         cJSON *entry = cJSON_CreateObject();
         cJSON_AddStringToObject(entry, "id",   hex_id);
-        cJSON_AddStringToObject(entry, "name", label.c_str());
+        cJSON_AddStringToObject(entry, "name", label.empty() ? hex_id : label.c_str());
         cJSON_AddBoolToObject(entry,  "already_added", known.count(hex_id) > 0);
         cJSON_AddItemToArray(result, entry);
     });
+
+    if (err != ESP_OK) {
+        cJSON_Delete(result);
+        send_result(req, false, "Failed to fetch devices from Overkiz");
+        return err;
+    }
 
     send_json(req, result);
     return ESP_OK;
