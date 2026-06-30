@@ -9,7 +9,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "freertos/timers.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -180,7 +179,7 @@ static const uint8_t DEV_LINE_ROWS[MAX_DEV_LINES] = {2, 3, 4, 5};
 
 #define OLED_QUEUE_DEPTH 8
 
-typedef enum { OLED_EVT_TX, OLED_EVT_RX, OLED_EVT_STATUS, OLED_EVT_CLEAR_DEV, OLED_EVT_NET_UPDATE } oled_evt_type_t;
+typedef enum { OLED_EVT_TX, OLED_EVT_RX, OLED_EVT_STATUS } oled_evt_type_t;
 
 typedef struct {
     oled_evt_type_t type;
@@ -196,9 +195,6 @@ static QueueHandle_t  s_queue;
 
 static StaticTask_t   s_task_buf;
 static StackType_t    s_task_stack[2048];
-
-static StaticTimer_t  s_periodic_timer_buf;
-static TimerHandle_t  s_periodic_timer;
 
 static oled_dev_line_t s_dev_lines[MAX_DEV_LINES];
 static int s_next_slot = 0;
@@ -416,26 +412,6 @@ static void oled_render_dev_line(int slot)
     send_data(line, OLED_COLS);
 }
 
-/* ---- Timer callback (fires every 2s) ---- */
-
-static int s_net_count = 0;
-
-static void periodic_cb(TimerHandle_t xTimer)
-{
-    (void)xTimer;
-    oled_evt_t evt = { .type = OLED_EVT_CLEAR_DEV, .position_pct = -1, .rssi = 0 };
-    evt.device_id[0] = '\0';
-    evt.cmd_str[0] = '\0';
-    xQueueSend(s_queue, &evt, 0);
-
-    s_net_count++;
-    if (s_net_count >= 15) {
-        s_net_count = 0;
-        oled_evt_t wevt = { .type = OLED_EVT_NET_UPDATE };
-        xQueueSend(s_queue, &wevt, 0);
-    }
-}
-
 /* ---- OLED task: sole owner of I2C after init ---- */
 
 static void oled_task(void *arg)
@@ -443,41 +419,48 @@ static void oled_task(void *arg)
     (void)arg;
     oled_evt_t evt;
     char buf[22];
+    TickType_t last_cleanup = 0;
+    TickType_t last_net_update = 0;
     for (;;) {
-        if (!xQueueReceive(s_queue, &evt, portMAX_DELAY)) continue;
-        switch (evt.type) {
-        case OLED_EVT_TX: {
-            int slot = find_or_alloc_line(evt.device_id);
-            oled_dev_line_t *dev = &s_dev_lines[slot];
-            if (!dev->has_tx && !dev->has_rx) dev->rx_first = false;
-            memcpy(dev->device_id, evt.device_id, sizeof(dev->device_id));
-            const char *cmd = evt.cmd_str;
-            if (cmd[0] == '0' && (cmd[1] == 'x' || cmd[1] == 'X')) cmd += 2;
-            snprintf(dev->tx_cmd, sizeof(dev->tx_cmd), "%.4s", cmd);
-            dev->has_tx = true;
-            dev->last_update = xTaskGetTickCount();
-            oled_render_dev_line(slot);
-            break;
+        if (xQueueReceive(s_queue, &evt, pdMS_TO_TICKS(2000))) {
+            switch (evt.type) {
+            case OLED_EVT_TX: {
+                int slot = find_or_alloc_line(evt.device_id);
+                oled_dev_line_t *dev = &s_dev_lines[slot];
+                if (!dev->has_tx && !dev->has_rx) dev->rx_first = false;
+                memcpy(dev->device_id, evt.device_id, sizeof(dev->device_id));
+                const char *cmd = evt.cmd_str;
+                if (cmd[0] == '0' && (cmd[1] == 'x' || cmd[1] == 'X')) cmd += 2;
+                snprintf(dev->tx_cmd, sizeof(dev->tx_cmd), "%.4s", cmd);
+                dev->has_tx = true;
+                dev->last_update = xTaskGetTickCount();
+                oled_render_dev_line(slot);
+                break;
+            }
+            case OLED_EVT_RX: {
+                int slot = find_or_alloc_line(evt.device_id);
+                oled_dev_line_t *dev = &s_dev_lines[slot];
+                if (!dev->has_tx && !dev->has_rx) dev->rx_first = true;
+                memcpy(dev->device_id, evt.device_id, sizeof(dev->device_id));
+                snprintf(dev->rx_cmd, sizeof(dev->rx_cmd), "%.2s", evt.cmd_str);
+                dev->rssi  = evt.rssi;
+                dev->has_rx = true;
+                dev->last_update = xTaskGetTickCount();
+                oled_render_dev_line(slot);
+                break;
+            }
+            case OLED_EVT_STATUS:
+                snprintf(buf, sizeof(buf), "%.21s", evt.cmd_str);
+                oled_print_line(7, buf[0] ? buf : NULL);
+                s_status_time = buf[0] ? xTaskGetTickCount() : 0;
+                break;
+            }
         }
-        case OLED_EVT_RX: {
-            int slot = find_or_alloc_line(evt.device_id);
-            oled_dev_line_t *dev = &s_dev_lines[slot];
-            if (!dev->has_tx && !dev->has_rx) dev->rx_first = true;
-            memcpy(dev->device_id, evt.device_id, sizeof(dev->device_id));
-            snprintf(dev->rx_cmd, sizeof(dev->rx_cmd), "%.2s", evt.cmd_str);
-            dev->rssi  = evt.rssi;
-            dev->has_rx = true;
-            dev->last_update = xTaskGetTickCount();
-            oled_render_dev_line(slot);
-            break;
-        }
-        case OLED_EVT_STATUS:
-            snprintf(buf, sizeof(buf), "%.21s", evt.cmd_str);
-            oled_print_line(7, buf[0] ? buf : NULL);
-            s_status_time = buf[0] ? xTaskGetTickCount() : 0;
-            break;
-        case OLED_EVT_CLEAR_DEV: {
-            TickType_t now = xTaskGetTickCount();
+
+        TickType_t now = xTaskGetTickCount();
+
+        if ((now - last_cleanup) >= pdMS_TO_TICKS(2000)) {
+            last_cleanup = now;
             if (s_status_time && (now - s_status_time) >= pdMS_TO_TICKS(4000)) {
                 s_status_time = 0;
                 oled_print_line(7, NULL);
@@ -501,9 +484,10 @@ static void oled_task(void *arg)
             s_next_slot = (kept < MAX_DEV_LINES) ? kept : 0;
             for (int i = 0; i < MAX_DEV_LINES; i++)
                 oled_render_dev_line(i);
-            break;
         }
-        case OLED_EVT_NET_UPDATE: {
+
+        if ((now - last_net_update) >= pdMS_TO_TICKS(10000)) {
+            last_net_update = now;
 #ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
             esp_netif_t *eth = esp_netif_get_handle_from_ifkey("eth");
             if (eth) {
@@ -526,8 +510,6 @@ static void oled_task(void *arg)
             }
             oled_draw_header(level);
 #endif
-            break;
-        }
         }
     }
 }
@@ -607,11 +589,6 @@ esp_err_t oled_init(void)
                                  s_queue_storage, &s_queue_buf);
     xTaskCreateStatic(oled_task, "oled_task", 2048, NULL,
                       tskIDLE_PRIORITY + 1, s_task_stack, &s_task_buf);
-
-    /* Periodic 2s timer: age out device lines (30s timeout) and clear status (4s timeout) */
-    s_periodic_timer = xTimerCreateStatic("oled_tmr", pdMS_TO_TICKS(2000),
-                                          pdTRUE, NULL, periodic_cb, &s_periodic_timer_buf);
-    xTimerStart(s_periodic_timer, 0);
 
     ESP_LOGI(TAG, "display init OK");
     return ESP_OK;
