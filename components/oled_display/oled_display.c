@@ -156,6 +156,22 @@ static const uint8_t icon_rx[OLED_CHAR_W] = {
     0x7C, 0x40, 0x50, 0x48, 0x44, 0x02
 };
 
+/* ---- Device line state (combines TX+RX per device) ---- */
+
+#define MAX_DEV_LINES 4
+
+typedef struct {
+    char device_id[7];
+    char tx_cmd[5];
+    char rx_cmd[3];
+    int  rssi;
+    bool has_tx;
+    bool has_rx;
+} oled_dev_line_t;
+
+/* Row mapping for each device line slot */
+static const uint8_t DEV_LINE_ROWS[MAX_DEV_LINES] = {2, 3, 4, 5};
+
 /* ---- Queue / task types (internal) ---- */
 
 #define OLED_QUEUE_DEPTH 8
@@ -179,6 +195,9 @@ static StackType_t    s_task_stack[2048];
 
 static StaticTimer_t  s_timer_buf;
 static TimerHandle_t  s_timer;
+
+static oled_dev_line_t s_dev_lines[MAX_DEV_LINES];
+static int s_next_slot = 0;
 
 
 /* ---- Low-level I2C helpers (called only from oled_task or init) ---- */
@@ -236,22 +255,71 @@ static void oled_draw_rssi_bars(uint8_t line[OLED_COLS], int rssi)
     memcpy(&line[OLED_COLS - 8], bars[level], 8);
 }
 
-/* ---- Print a line with an icon prepended and optional RSSI bars ---- */
+/* ---- Per-device line helpers ---- */
 
-static void oled_print_icon_text(uint8_t row, const uint8_t icon[OLED_CHAR_W],
-                                 const char *text, int rssi)
+static int find_or_alloc_line(const char *device_id)
 {
+    if (!device_id) device_id = "";
+    for (int i = 0; i < MAX_DEV_LINES; i++) {
+        if (strcmp(s_dev_lines[i].device_id, device_id) == 0) return i;
+    }
+    for (int i = 0; i < MAX_DEV_LINES; i++) {
+        if (s_dev_lines[i].device_id[0] == '\0') return i;
+    }
+    int slot = s_next_slot;
+    s_next_slot = (s_next_slot + 1) % MAX_DEV_LINES;
+    memset(&s_dev_lines[slot], 0, sizeof(oled_dev_line_t));
+    return slot;
+}
+
+/* Layout per device line (128 px):
+ *  0-35   device name (6 chars)
+ *  36-47  gap
+ *  48-53  TX icon (6 px)
+ *  54-56  gap (3 px)
+ *  57-80  TX cmd text (4 chars max)
+ *  81-83  gap (3 px)
+ *  84-89  RX icon (6 px)
+ *  90-92  gap (3 px)
+ *  93-104 RX cmd text (2 chars max)
+ *  105-119 gap
+ *  120-127 RSSI signal bars (8 px)
+ */
+
+static void oled_render_dev_line(int slot)
+{
+    int row = DEV_LINE_ROWS[slot];
+    oled_dev_line_t *dev = &s_dev_lines[slot];
     uint8_t line[OLED_COLS];
     memset(line, 0, sizeof(line));
-    memcpy(line, icon, OLED_CHAR_W);
-    if (text) {
-        for (size_t i = 0; i < MAX_CHARS - 1 && text[i]; i++) {
-            uint8_t c = (uint8_t)text[i];
+
+    if (dev->device_id[0]) {
+        for (size_t i = 0; i < 6 && dev->device_id[i]; i++) {
+            uint8_t c = (uint8_t)dev->device_id[i];
             if (c < 0x20 || c > 0x7F) c = 0x20;
-            memcpy(&line[(i + 1) * OLED_CHAR_W + 5], font6x8[c - 0x20], OLED_CHAR_W);
+            memcpy(&line[i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
         }
     }
-    if (rssi <= 0) oled_draw_rssi_bars(line, rssi);
+
+    if (dev->has_tx) {
+        memcpy(&line[48], icon_tx, OLED_CHAR_W);
+        for (size_t i = 0; i < 4 && dev->tx_cmd[i]; i++) {
+            uint8_t c = (uint8_t)dev->tx_cmd[i];
+            if (c < 0x20 || c > 0x7F) c = 0x20;
+            memcpy(&line[57 + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+        }
+    }
+
+    if (dev->has_rx) {
+        memcpy(&line[84], icon_rx, OLED_CHAR_W);
+        for (size_t i = 0; i < 2 && dev->rx_cmd[i]; i++) {
+            uint8_t c = (uint8_t)dev->rx_cmd[i];
+            if (c < 0x20 || c > 0x7F) c = 0x20;
+            memcpy(&line[93 + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
+        }
+        oled_draw_rssi_bars(line, dev->rssi);
+    }
+
     send_cmd(0xB0 | row);
     send_cmd(0x00);
     send_cmd(0x10);
@@ -278,14 +346,27 @@ static void oled_task(void *arg)
     for (;;) {
         if (!xQueueReceive(s_queue, &evt, portMAX_DELAY)) continue;
         switch (evt.type) {
-        case OLED_EVT_TX:
-            snprintf(buf, sizeof(buf), "%.6s %.4s", evt.device_id, evt.cmd_str);
-            oled_print_icon_text(2, icon_tx, buf, 1);
+        case OLED_EVT_TX: {
+            int slot = find_or_alloc_line(evt.device_id);
+            oled_dev_line_t *dev = &s_dev_lines[slot];
+            memcpy(dev->device_id, evt.device_id, sizeof(dev->device_id));
+            const char *cmd = evt.cmd_str;
+            if (cmd[0] == '0' && (cmd[1] == 'x' || cmd[1] == 'X')) cmd += 2;
+            snprintf(dev->tx_cmd, sizeof(dev->tx_cmd), "%.4s", cmd);
+            dev->has_tx = true;
+            oled_render_dev_line(slot);
             break;
-        case OLED_EVT_RX:
-            snprintf(buf, sizeof(buf), "%.6s %.2s", evt.device_id, evt.cmd_str);
-            oled_print_icon_text(6, icon_rx, buf, evt.rssi);
+        }
+        case OLED_EVT_RX: {
+            int slot = find_or_alloc_line(evt.device_id);
+            oled_dev_line_t *dev = &s_dev_lines[slot];
+            memcpy(dev->device_id, evt.device_id, sizeof(dev->device_id));
+            snprintf(dev->rx_cmd, sizeof(dev->rx_cmd), "%.2s", evt.cmd_str);
+            dev->rssi  = evt.rssi;
+            dev->has_rx = true;
+            oled_render_dev_line(slot);
             break;
+        }
         case OLED_EVT_STATUS:
             snprintf(buf, sizeof(buf), "%.21s", evt.cmd_str);
             oled_print_line(7, buf[0] ? buf : NULL);
@@ -355,12 +436,14 @@ esp_err_t oled_init(void)
         return ret;
     }
 
-    /* Clear display then draw static layout — done before task starts */
+    /* Clear display, device-line state, then draw static layout — done before task starts */
     for (uint8_t p = 0; p < OLED_PAGES; p++)
         oled_print_line(p, NULL);
+    memset(s_dev_lines, 0, sizeof(s_dev_lines));
+    s_next_slot = 0;
     oled_print_line(0, "io-homecontrol");
     oled_print_line(1, "--------------------");
-    oled_print_line(5, "--------------------");
+    oled_print_line(6, "--------------------");
 
     /* Create queue and task — all I2C access goes through the task from here */
     s_queue = xQueueCreateStatic(OLED_QUEUE_DEPTH, sizeof(oled_evt_t),

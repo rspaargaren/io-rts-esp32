@@ -12,14 +12,20 @@ extern "C" {
 esp_err_t oled_init(void);
 
 /* Screen layout (rows 0-7):
- *  0  "io-homecontrol"       title
- *  1  "--------------------" separator
- *  2  "TX> AABBCC 0x31"      last TX: device + cmd  (TX section row 1/2)
- *  3  (blank)                                         (TX section row 2/2)
- *  4  (blank)
- *  5  "--------------------" separator
- *  6  "RX< AABBCC FE" + bars last RX + RSSI bars     (RX section row 1/2)
- *  7  "Ready"                transient status msg     (RX section row 2/2)
+ *  0  "io-homecontrol"          title
+ *  1  "--------------------"    separator
+ *  2  "AABBCC ↑CMD ↓FE ███"   device line 0 (separator → 2px gap →)
+ *  3  "AABBCC ↓FE ███"        device line 1
+ *  4  "AABBCC ↑CMD"            device line 2
+ *  5  "AABBCC ↑CMD ↓FE ███"   device line 3
+ *  6  "--------------------"    separator
+ *  7  "Ready"                  transient status msg
+ *
+ * Each device line occupies a full 8-pixel page but only uses the top 6 rows,
+ * leaving 2 blank pixel rows at the bottom for vertical spacing.
+ * Layout within a line: [device name] [TX icon+cmd] [RX icon+cmd] [RSSI bars]
+ *   TX/RX parts hidden when no data available for that direction.
+ *   RSSI bars right-aligned, shown with RX.
  */
 void oled_show_tx(const char *cmd_name, const char *device_id);
 void oled_show_rx(const char *device_id, const char *cmd_hex,
