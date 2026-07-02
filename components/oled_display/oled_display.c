@@ -210,7 +210,7 @@ static oled_dev_line_t s_dev_lines[MAX_DEV_LINES];
 static int s_next_slot = 0;
 
 static TickType_t s_status_time = 0;
-static char s_version_str[9] = "v0.00.00";
+static char s_version_str[16] = "v0.00.00";
 
 static bool s_mqtt_connected = false;
 static int  s_net_state = 0;
@@ -342,7 +342,7 @@ static const uint8_t icon_lan_off[8] = {
     0x04, 0x22, 0x41, 0x01, 0x08, 0x12, 0x24, 0x00
 };
 
-static void oled_draw_rssi_bars(uint8_t line[OLED_COLS], int rssi)
+static void oled_draw_rssi_bars(uint8_t *line, int col, int rssi)
 {
     int level;
     if (rssi == 0)                level = 0;
@@ -350,7 +350,7 @@ static void oled_draw_rssi_bars(uint8_t line[OLED_COLS], int rssi)
     else if (rssi >= -80)         level = 2;
     else if (rssi >= -95)         level = 1;
     else                          level = 0;
-    memcpy(&line[OLED_COLS - 8], RSSI_BARS[level], 8);
+    memcpy(&line[col], RSSI_BARS[level], 8);
 }
 
 /* ---- Header row: IO logo + "control" + right-aligned network icon ---- */
@@ -358,22 +358,28 @@ static void oled_draw_rssi_bars(uint8_t line[OLED_COLS], int rssi)
 /* Sentinel passed to oled_draw_header to indicate "no credentials configured" */
 #define RSSI_NO_CREDS 127
 
+static const uint8_t s_logo_rows[][2] = {
+    {0xff, 0xf0}, {0x88, 0x10}, {0x88, 0x10}, {0x88, 0x10},
+    {0x88, 0x10}, {0x88, 0x10}, {0x8f, 0xf0}
+};
+
+static void draw_logo(uint8_t *line, int x)
+{
+    for (int col = 0; col < 12; col++) {
+        uint8_t byte = 0;
+        for (int row = 0; row < 7; row++) {
+            uint16_t r = ((uint16_t)s_logo_rows[row][0] << 8) | s_logo_rows[row][1];
+            if (r & (0x8000 >> col)) byte |= (1 << row);
+        }
+        line[x + col] = byte << 1;
+    }
+}
+
 static void oled_draw_header(void)
 {
     uint8_t line[OLED_COLS];
     memset(line, 0, sizeof(line));
-    static const uint8_t logo_rows[][2] = {
-        {0xff, 0xf0}, {0x88, 0x10}, {0x88, 0x10}, {0x88, 0x10},
-        {0x88, 0x10}, {0x88, 0x10}, {0x8f, 0xf0}
-    };
-    for (int col = 0; col < 12; col++) {
-        uint8_t byte = 0;
-        for (int row = 0; row < 7; row++) {
-            uint16_t r = ((uint16_t)logo_rows[row][0] << 8) | logo_rows[row][1];
-            if (r & (0x8000 >> col)) byte |= (1 << row);
-        }
-        line[col] = byte << 1;
-    }
+    draw_logo(line, 0);
     int pos = 16;
     const char *title = "control";
     for (size_t i = 0; title[i]; i++) {
@@ -390,7 +396,7 @@ static void oled_draw_header(void)
     if (s_net_state == RSSI_NO_CREDS)
         memcpy(&line[OLED_COLS - 8], icon_lan_off, 8);
     else
-        oled_draw_rssi_bars(line, s_net_state);
+        oled_draw_rssi_bars(line, OLED_COLS - 8, s_net_state);
 #endif
 
     send_cmd(0xB0 | 0);
@@ -409,19 +415,7 @@ static void oled_draw_condensed_header(int x, int page)
     uint8_t line[OLED_COLS];
     memset(line, 0, sizeof(line));
     int col = x;
-
-    static const uint8_t logo_rows[][2] = {
-        {0xff, 0xf0}, {0x88, 0x10}, {0x88, 0x10}, {0x88, 0x10},
-        {0x88, 0x10}, {0x88, 0x10}, {0x8f, 0xf0}
-    };
-    for (int c = 0; c < 12; c++) {
-        uint8_t byte = 0;
-        for (int row = 0; row < 7; row++) {
-            uint16_t r = ((uint16_t)logo_rows[row][0] << 8) | logo_rows[row][1];
-            if (r & (0x8000 >> c)) byte |= (1 << row);
-        }
-        line[col + c] = byte << 1;
-    }
+    draw_logo(line, col);
     col += 16;
 
     const char *title = "control";
@@ -438,17 +432,10 @@ static void oled_draw_condensed_header(int x, int page)
 #ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
     memcpy(&line[col], s_net_state ? icon_lan_on : icon_lan_off, 8);
 #else
-    if (s_net_state == RSSI_NO_CREDS) {
+    if (s_net_state == RSSI_NO_CREDS)
         memcpy(&line[col], icon_lan_off, 8);
-    } else {
-        int level;
-        if (s_net_state == 0)                level = 0;
-        else if (s_net_state >= -65)         level = 3;
-        else if (s_net_state >= -80)         level = 2;
-        else if (s_net_state >= -95)         level = 1;
-        else                                  level = 0;
-        memcpy(&line[col], RSSI_BARS[level], 8);
-    }
+    else
+        oled_draw_rssi_bars(line, col, s_net_state);
 #endif
 
     send_cmd(0xB0 | page);
@@ -544,7 +531,7 @@ static void oled_render_dev_line(int slot)
             if (c < 0x20 || c > 0x7F) c = 0x20;
             memcpy(&line[rx_text + i * OLED_CHAR_W], font6x8[c - 0x20], OLED_CHAR_W);
         }
-        oled_draw_rssi_bars(line, dev->rssi);
+        oled_draw_rssi_bars(line, OLED_COLS - 8, dev->rssi);
     }
 
     send_cmd(0xB0 | row);
@@ -623,18 +610,22 @@ static void clear_stale_dev_lines(TickType_t now)
 static void compact_dev_lines(void)
 {
     int kept = 0;
+    bool changed = false;
     for (int i = 0; i < MAX_DEV_LINES; i++) {
         if (s_dev_lines[i].device_id[0]) {
             if (i != kept) {
                 s_dev_lines[kept] = s_dev_lines[i];
                 memset(&s_dev_lines[i], 0, sizeof(oled_dev_line_t));
+                changed = true;
             }
             kept++;
         }
     }
     s_next_slot = (kept < MAX_DEV_LINES) ? kept : 0;
-    for (int i = 0; i < MAX_DEV_LINES; i++)
-        oled_render_dev_line(i);
+    if (changed) {
+        for (int i = 0; i < MAX_DEV_LINES; i++)
+            oled_render_dev_line(i);
+    }
 }
 
 /* ---- Screensaver helpers ---- */
