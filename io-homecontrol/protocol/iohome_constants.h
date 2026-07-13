@@ -37,6 +37,7 @@ namespace iohome
   constexpr int32_t CHANNEL_PREAMBLE_TIME_US = 9500;         // microseconds before retry if preamble detected
   constexpr int32_t CHANNEL_RESPONSE_TIME_US = 50000;        // microseconds to wait after a command with no 'end' flag
   constexpr int32_t CHANNEL_RESPONSE_START_TIME_US = 300000; // microseconds to wait after a command with 'start' flag
+  constexpr int32_t CHANNEL_PREAMBLE_SYNC_TIMEOUT_US = 200000; // microseconds max for preamble/sync detection before resetting radio
 
   // ============================================================================
   // Data Link Layer Constants

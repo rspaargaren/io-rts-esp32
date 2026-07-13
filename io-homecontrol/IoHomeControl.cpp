@@ -346,15 +346,19 @@ namespace iohome
     IoHomeControl *ioHome = static_cast<IoHomeControl *>(arg);
     uint32_t currentFrequency = FREQUENCY_CHANNEL_2;
     TickType_t waitTime = CHANNEL_HOP_TIME_US * portTICK_PERIOD_MS / 1000;
+    bool preambleSyncDetected = false;
+    int64_t preambleSyncDetectedStartUs = 0;
     for (;;)
     {
-      if (uxQueueMessagesWaiting(sRadioRxFramesQueue) == 0 && uxQueueMessagesWaiting(sTxIoQueue) == 0)
+      if (uxQueueMessagesWaiting(sRadioRxFramesQueue) == 0 &&
+          (preambleSyncDetected || uxQueueMessagesWaiting(sTxIoQueue) == 0))
       {
         // Wait for RX or TX event
         xEventGroupWaitBits(sEventGroup, EVENT_BIT_RX | EVENT_BIT_TX, pdTRUE, pdFALSE, waitTime);
       }
       if (xQueueReceive(sRadioRxFramesQueue, &item, 0))
       {
+        preambleSyncDetected = false;
         // Process received frame
         RxFrameQueueItem rxFrame;
         // Parse frame
@@ -392,6 +396,18 @@ namespace iohome
       else if (ioHome->isReceiving()                                                              // still receiving enabled
                && (ioHome->mRadio->isSyncWordDetected() || ioHome->mRadio->isPreambleDetected())) // Preamble or sync word detected
       {
+        if (!preambleSyncDetected)
+        {
+          preambleSyncDetected = true;
+          preambleSyncDetectedStartUs = esp_timer_get_time();
+        }
+        else if ((esp_timer_get_time() - preambleSyncDetectedStartUs) > CHANNEL_PREAMBLE_SYNC_TIMEOUT_US * 1000)
+        {
+          // Timeout: sync word/preamble stuck, reset radio receive state
+          IO_LOGW("process_radio_task: Preamble/sync detection timeout, resetting radio");
+          ioHome->mRadio->StartReceive();
+          preambleSyncDetected = false;
+        }
         waitTime = CHANNEL_PREAMBLE_TIME_US * portTICK_PERIOD_MS / 1000; // We will see soon if frame arrives...
         // IO_LOGI("process_radio_task: Preamble or sync word detected");
       }
@@ -399,6 +415,7 @@ namespace iohome
                && !ioHome->mRadio->isSyncWordDetected()  // No sync word detected
                && !ioHome->mRadio->isPreambleDetected()) // No preamble detected
       {
+        preambleSyncDetected = false;
         TxFrameQueueItem item;
         if (xQueueReceive(sTxIoQueue, &item, 0))
         {
