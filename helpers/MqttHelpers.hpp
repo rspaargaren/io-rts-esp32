@@ -37,7 +37,8 @@ namespace Helpers
         /// @brief Publish an estimated (in-flight) position to MQTT, non-retained
         /// @param deviceId IO device ID
         /// @param position Estimated position (0-100)
-        void PublishEstimatedPosition(const std::string &deviceId, int position);
+        /// @param state Optional state string ("open", "opening", "closing", "closed"), or nullptr to skip
+        void PublishEstimatedPosition(const std::string &deviceId, int position, const char *state = nullptr);
 
         const std::string &GetTopicPrefix() { return mTopicPrefix; }
 

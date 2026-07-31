@@ -50,6 +50,10 @@ namespace IoRts
             ESP_LOGE(tag, "%s", log.c_str());
             level = 'E';
             break;
+        case ESP_LOG_WARN:
+            ESP_LOGW(tag, "%s", log.c_str());
+            level = 'W';
+            break;
         case ESP_LOG_INFO:
             ESP_LOGI(tag, "%s", log.c_str());
             level = 'I';
@@ -179,11 +183,24 @@ namespace IoRts
             if (fraction > 1.0f) fraction = 1.0f;
             float estimated = dev.move_start_pos + (dev.move_target_pos - dev.move_start_pos) * fraction;
             int estimated_int = (int)estimated;
+            // Derive open/opening/closing/closed state from movement direction
+            const char *state = nullptr;
+            if (fraction >= 1.0f)
+            {
+                if (dev.info.is_openclose_inverted)
+                    state = (dev.move_target_pos < 0.1f) ? "closed" : "open";
+                else
+                    state = (dev.move_target_pos > 99.9f) ? "closed" : "open";
+            }
+            else if (dev.move_target_pos > dev.move_start_pos)
+                state = dev.info.is_openclose_inverted ? "opening" : "closing";
+            else if (dev.move_target_pos < dev.move_start_pos)
+                state = dev.info.is_openclose_inverted ? "closing" : "opening";
 #if CONFIG_WEB_ENABLED
             web_server_broadcast_position(id.c_str(), estimated_int, false, true);
 #endif
             if (sMqttHelper != nullptr)
-                sMqttHelper->PublishEstimatedPosition(id, estimated_int);
+                sMqttHelper->PublishEstimatedPosition(id, estimated_int, state);
 
             // Stop broadcasting once clamped (device should report back soon)
             if (fraction >= 1.0f)

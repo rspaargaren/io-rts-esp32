@@ -299,8 +299,9 @@ namespace iohome
     /// @param request Request to send
     /// @param response Response received (only if returning true)
     /// @param frequency Frequency to use to send request
+    /// @param expected_response_cmd Expected command in the final response after authentication (-1 = any)
     /// @return true if success (response available), false otherwise.
-    bool SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency);
+    bool SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd = -1);
 
     /// @brief Manages the authentication process related to received request.
     /// @warning You must take sMutex before calling!

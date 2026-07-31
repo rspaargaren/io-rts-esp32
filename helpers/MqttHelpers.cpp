@@ -471,51 +471,52 @@ namespace Helpers
                             // ESP_LOGI(TAG, "Received command %s for device %s", command.c_str(), deviceID.c_str());
                             if (topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
                             {
+                                auto *mgr = mqttHelper->GetIoRtsManager();
                                 if (command.compare("CLOSE") == 0)
                                 {
                                     bool quiet = false;
                                     {
-                                        std::lock_guard<std::mutex> guard(mqttHelper->GetIoRtsManager()->mIoDevicesMutex);
-                                        auto it = mqttHelper->GetIoRtsManager()->mIoDevices.find(deviceID);
-                                        if (it != mqttHelper->GetIoRtsManager()->mIoDevices.end())
+                                        std::lock_guard<std::mutex> guard(mgr->mIoDevicesMutex);
+                                        auto it = mgr->mIoDevices.find(deviceID);
+                                        if (it != mgr->mIoDevices.end())
                                             quiet = it->second.quiet;
                                     }
-                                    mqttHelper->GetIoRtsManager()->mIoHome->CloseDevice(deviceID, quiet);
+                                    mgr->mIoHome->CloseDevice(deviceID, quiet);
                                 }
                                 else if (command.compare("OPEN") == 0)
                                 {
                                     bool quiet = false;
                                     {
-                                        std::lock_guard<std::mutex> guard(mqttHelper->GetIoRtsManager()->mIoDevicesMutex);
-                                        auto it = mqttHelper->GetIoRtsManager()->mIoDevices.find(deviceID);
-                                        if (it != mqttHelper->GetIoRtsManager()->mIoDevices.end())
+                                        std::lock_guard<std::mutex> guard(mgr->mIoDevicesMutex);
+                                        auto it = mgr->mIoDevices.find(deviceID);
+                                        if (it != mgr->mIoDevices.end())
                                             quiet = it->second.quiet;
                                     }
-                                    mqttHelper->GetIoRtsManager()->mIoHome->OpenDevice(deviceID, quiet);
+                                    mgr->mIoHome->OpenDevice(deviceID, quiet);
                                 }
                                 else if (command.compare("STOP") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->StopDevice(deviceID);
+                                    mgr->mIoHome->StopDevice(deviceID);
                                 }
                                 else if (command.compare("ON") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_ON_POSITION);
+                                    mgr->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_ON_POSITION);
                                 }
                                 else if (command.compare("OFF") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_OFF_POSITION);
+                                    mgr->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_OFF_POSITION);
                                 }
                                 else if (command.compare("LOCK") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_OFF_POSITION); // not sure, wait for feedback
+                                    mgr->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_OFF_POSITION);
                                 }
                                 else if (command.compare("UNLOCK") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_ON_POSITION); // not sure, wait for feedback
+                                    mgr->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_ON_POSITION);
                                 }
                                 else if (command.compare("IDENTIFY") == 0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->IdentifyDevice(deviceID);
+                                    mgr->mIoHome->IdentifyDevice(deviceID);
                                 }
                             }
                             else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_POSITION_TOPIC)) // it should be a position between 0 and 100
@@ -1581,12 +1582,17 @@ namespace Helpers
         std::string topic = mTopicPrefix + "/" + MQTT_CLIENT_PREFIX_IO + deviceID + MQTT_CLIENT_SUFFIX_REMOTES + MQTT_CLIENT_STATE_TOPIC;
         esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), list.c_str(), 0, 0, 1);
     }
-    void MqttHelpers::PublishEstimatedPosition(const std::string &deviceId, int position)
+    void MqttHelpers::PublishEstimatedPosition(const std::string &deviceId, int position, const char *state)
     {
         if (!mStarted || mMqttClientHandle == nullptr) return;
         std::string positionTopic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + deviceId + MQTT_CLIENT_POSITION_TOPIC;
         std::string data = std::to_string(position);
         esp_mqtt_client_publish(mMqttClientHandle, positionTopic.c_str(), data.c_str(), 0, 0, 0); // retain=0
+        if (state != nullptr)
+        {
+            std::string stateTopic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + deviceId + MQTT_CLIENT_STATE_TOPIC;
+            esp_mqtt_client_publish(mMqttClientHandle, stateTopic.c_str(), state, 0, 0, 0); // retain=0
+        }
     }
 
     void MqttHelpers::SendLog(const std::string &log)
