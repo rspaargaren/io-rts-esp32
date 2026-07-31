@@ -134,8 +134,9 @@ void syslog_send(const char *line)
 
     // Omit timestamp — let the syslog server stamp with reception time.
     // This avoids wrong timestamps when NTP hasn't synced yet.
+    // Use as format the rfc5424 format with UTF-8 BOM to avoid issues with non-ASCII characters in the log line.
     char buf[256];
-    int len = snprintf(buf, sizeof(buf), "<%u>%s %s: %s",
+    int len = snprintf(buf, sizeof(buf), "<%u>1 - %s %s - - - \xEF\xBB\xBF%s",
                        (unsigned)pri, s_hostname, s_id, line);
     if (len <= 0) return;
     if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
