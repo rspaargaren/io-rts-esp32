@@ -132,10 +132,11 @@ void syslog_send(const char *line)
 
     uint8_t pri = (s_facility * 8) + severity;
 
-    // Omit timestamp — let the syslog server stamp with reception time.
+    // RFC 5424 format. Timestamp omitted (nil) — let the syslog server stamp with reception time.
     // This avoids wrong timestamps when NTP hasn't synced yet.
+    // UTF-8 BOM prefix on the MSG field as required by RFC 5424 for UTF-8 encoded messages.
     char buf[256];
-    int len = snprintf(buf, sizeof(buf), "<%u>%s %s: %s",
+    int len = snprintf(buf, sizeof(buf), "<%u>1 - %s %s - - - \xEF\xBB\xBF%s",
                        (unsigned)pri, s_hostname, s_id, line);
     if (len <= 0) return;
     if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
