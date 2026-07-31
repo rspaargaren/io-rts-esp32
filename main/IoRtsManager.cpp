@@ -50,6 +50,10 @@ namespace IoRts
             ESP_LOGE(tag, "%s", log.c_str());
             level = 'E';
             break;
+        case ESP_LOG_WARN:
+            ESP_LOGW(tag, "%s", log.c_str());
+            level = 'W';
+            break;            
         case ESP_LOG_INFO:
             ESP_LOGI(tag, "%s", log.c_str());
             level = 'I';
@@ -126,8 +130,14 @@ namespace IoRts
                     it->second.info.is_openclose_inverted = device.info.is_openclose_inverted;
                 }
                 it->second.is_stopped = device.is_stopped;
-                if (device.is_stopped && std::abs(device.position - device.target) <= 2.0f)
+                if (device.is_stopped)
                     it->second.move_start_us = 0;
+                else if (device.move_start_us != 0)
+                {
+                    it->second.move_start_us   = device.move_start_us;
+                    it->second.move_start_pos  = device.move_start_pos;
+                    it->second.move_target_pos = device.move_target_pos;
+                }
                 it->second.last_status_timestamp = device.last_status_timestamp;
                 it->second.next_status_update_timestamp = device.next_status_update_timestamp;
                 it->second.position = device.position;
@@ -179,11 +189,25 @@ namespace IoRts
             if (fraction > 1.0f) fraction = 1.0f;
             float estimated = dev.move_start_pos + (dev.move_target_pos - dev.move_start_pos) * fraction;
             int estimated_int = (int)estimated;
+            // Derive state from movement direction, or final state if completed
+            const char *state = nullptr;
+            if (fraction >= 1.0f)
+            {
+                // Movement complete — publish final open/closed state
+                if (dev.info.is_openclose_inverted)
+                    state = (dev.move_target_pos < 0.1f) ? "closed" : "open";
+                else
+                    state = (dev.move_target_pos > 99.9f) ? "closed" : "open";
+            }
+            else if (dev.move_target_pos > dev.move_start_pos)
+                state = dev.info.is_openclose_inverted ? "opening" : "closing";
+            else if (dev.move_target_pos < dev.move_start_pos)
+                state = dev.info.is_openclose_inverted ? "closing" : "opening";
 #if CONFIG_WEB_ENABLED
             web_server_broadcast_position(id.c_str(), estimated_int, false, true);
 #endif
             if (sMqttHelper != nullptr)
-                sMqttHelper->PublishEstimatedPosition(id, estimated_int);
+                sMqttHelper->PublishEstimatedPosition(id, estimated_int, state);
 
             // Stop broadcasting once clamped (device should report back soon)
             if (fraction >= 1.0f)
