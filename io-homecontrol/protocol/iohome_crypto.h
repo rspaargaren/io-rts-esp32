@@ -154,5 +154,26 @@ namespace iohome
             const uint8_t *challenge,
             const uint8_t system_key[AES_KEY_SIZE]);
 
+        // ============================================================================
+        // 1W Crypto
+        // ============================================================================
+
+        /// Compute 6-byte MAC for a 1W frame.
+        /// frame_cmd_data: starts at the command byte (e.g. {0x2E, 0x00} for PAIR).
+        /// Uses AES-128-ECB on an IV built from frame bytes + checksum + seq.
+        bool create_1w_hmac(
+            const uint8_t *frame_cmd_data, size_t frame_len,
+            const uint8_t seq[2],
+            const uint8_t key[AES_KEY_SIZE],
+            uint8_t hmac_out[HMAC_SIZE]);
+
+        /// Encrypt the per-device 1W key for the ADD (0x30) packet.
+        /// Uses AES-128-CFB128 with TRANSFER_KEY and an IV derived from the
+        /// CONTROLLER's node address (our mOwnNodeId) — NOT the device node ID.
+        bool encrypt_1w_key(
+            const uint8_t controller_node_id[NODE_ID_SIZE],
+            const uint8_t key_in[AES_KEY_SIZE],
+            uint8_t enc_key_out[AES_KEY_SIZE]);
+
     } // namespace crypto
 } // namespace iohome
