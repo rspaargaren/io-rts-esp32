@@ -221,7 +221,7 @@ Add `ProtocolMode` enum and three fields to `IoDeviceInformation`. Add read/writ
 
 **Check:** Build succeeds. Load/save round-trip of an existing `devices.json` unchanged.
 
-→ Confirm before Phase 2.
+**→ USER APPROVAL REQUIRED before proceeding to Phase 2.**
 
 ---
 
@@ -233,19 +233,19 @@ Add `encrypt_1w_key` and `create_1w_hmac`.
 
 **Check:** Unit test via serial command (Phase 5 scaffold): given known inputs, output matches reference values from `iohcCryptoHelpers`.
 
-→ Confirm before Phase 3.
+**→ USER APPROVAL REQUIRED before proceeding to Phase 3.**
 
 ---
 
 ### Phase 3 — `Io1WControl` class
 
-**Files:** `io-homecontrol/Io1WControl.hpp/.cpp`, `io-homecontrol/IoHomeControl.hpp` (TransmitFrame + GetMutex public)
+**Files:** `io-homecontrol/Io1WControl.hpp/.cpp`, `io-homecontrol/IoHomeControl.hpp` (`TransmitFrame` → public)
 
 Implement `PairDevice(name, type, manufacturer)`, `UnpairDevice(id)`, `Send(device, position_pct)`. Packet building for CMD 0x2E, 0x30, 0x39, 0x20.
 
 **Check:** Build succeeds. No 2W regressions (run existing 2W commands via serial).
 
-→ Confirm before Phase 4.
+**→ USER APPROVAL REQUIRED before proceeding to Phase 4.**
 
 ---
 
@@ -255,9 +255,9 @@ Implement `PairDevice(name, type, manufacturer)`, `UnpairDevice(id)`, `Send(devi
 
 Add `mIo1W`, dispatch methods, `Pair1WDevice`, `Unpair1WDevice`. Update four `mIoHome->` call sites in `web_server.cpp`. Update `arm_move` to skip `ScheduleConfirmationPoll` for 1W.
 
-**Check:** 2W open/close/position still works. 2W `ScheduleConfirmationPoll` still fires. Build succeeds.
+**Check:** Build succeeds. Flash to device. 2W open/close/position still works. 2W `ScheduleConfirmationPoll` still fires.
 
-→ Confirm before Phase 5.
+**→ USER APPROVAL REQUIRED before proceeding to Phase 5.**
 
 ---
 
@@ -280,7 +280,7 @@ send1w <id> open|close|stop|<0-100> — send a 1W command
 6. `send1w <id> open` — check `/api/devices` response shows position animating
 7. 2W command to a 2W device immediately after — must work without interference
 
-→ User confirms hardware test before Phase 6.
+**→ USER APPROVAL REQUIRED (hardware test results) before proceeding to Phase 6.**
 
 ---
 
@@ -307,7 +307,7 @@ curl http://192.168.178.57/api/devices
 ```
 1W device shows `"protocol":"1w"` and `"position_estimated":true`.
 
-→ Confirm before Phase 7.
+**→ USER APPROVAL REQUIRED before proceeding to Phase 7.**
 
 ---
 
@@ -338,6 +338,8 @@ curl http://192.168.178.57/api/devices
   4. User clicks "Device is closed" — elapsed time saved as `transit_time_ms`
 
 **Check:** Full end-to-end in browser. Pair a 1W device → badge appears → manual calibrate → position bar animates → 2W device still works in parallel.
+
+**→ USER APPROVAL REQUIRED to close Phase 7 and declare the feature complete.**
 
 ---
 
