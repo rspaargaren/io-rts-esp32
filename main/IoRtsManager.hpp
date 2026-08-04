@@ -3,6 +3,7 @@
 #include "MqttHelpers.hpp"
 #include "RadioSX1276.hpp"
 #include "IoHomeControl.hpp"
+#include "Io1WControl.hpp"
 #include "DeviceStorage.hpp"
 
 #include <map>
@@ -18,6 +19,7 @@ namespace IoRts
 
         RadioLinks::RadioSX1276 *mSX1276Radio; // Pointer to radio object used in IoHomeControl object
         iohome::IoHomeControl *mIoHome;        // Pointer to IoHomeControl object used to manage Io-HomeControl protocol
+        iohome::Io1WControl   *mIo1W = nullptr; // Simplex 1W controller (shares radio with mIoHome)
 
         /// @brief Constructor for IoRtsManager
         IoRtsManager();
@@ -79,6 +81,24 @@ namespace IoRts
         /// @param distance_fraction Fraction of full range being traveled (0.0-1.0)
         void ScheduleConfirmationPoll(const std::string &deviceID, uint32_t transit_time_ms, float distance_fraction);
 
+        // ====================================================================
+        // Unified command dispatch (2W and 1W)
+        // ====================================================================
+
+        /// @brief Send open command — routes to 2W or 1W based on device's protocol_mode
+        bool OpenDevice(const std::string &deviceID, bool quiet = false);
+        /// @brief Send close command — routes to 2W or 1W based on device's protocol_mode
+        bool CloseDevice(const std::string &deviceID, bool quiet = false);
+        /// @brief Send position command — routes to 2W or 1W
+        bool SetDevicePosition(const std::string &deviceID, uint8_t position, bool quiet = false);
+        /// @brief Send stop command — routes to 2W or 1W (1W sends current estimated position)
+        bool StopDevice(const std::string &deviceID);
+
+        /// @brief Pair a new 1W device. Device must be in pairing mode. Returns new device ID or empty on failure.
+        std::string Pair1WDevice(const std::string &name, iohome::DeviceType type, iohome::Manufacturer manufacturer);
+        /// @brief Unpair a 1W device: sends REMOVE frame and deletes from storage.
+        bool Unpair1WDevice(const std::string &deviceID);
+
         /// @brief Start passive key sniffing — captures the IO system key from the next pairing handshake
         void StartKeySniff();
 
@@ -109,6 +129,9 @@ namespace IoRts
 
     private:
         bool mIoPassive = false; // current configuration, initialized at boot
+
+        /// @brief Persist incremented 1W sequence counter to flash (read-modify-write to preserve linked_remotes)
+        void SaveDevice1WSequence(const std::string &deviceID);
 
         /// @brief Load devices and remotes from flash storage, register them in IoHomeControl
         void LoadIoDevicesFromStorage();

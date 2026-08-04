@@ -555,8 +555,9 @@ static esp_err_t api_action_post(httpd_req_t *req)
         }
         float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
         uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
+        bool is_2w = (it != s_manager->mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_2W);
         s_manager->mIoDevicesMutex.unlock();
-        s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
+        if (is_2w) s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
     };
 
     if (strcmp(action, "open") == 0) {
@@ -565,7 +566,7 @@ static esp_err_t api_action_post(httpd_req_t *req)
         bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
         float target_pos = (qit != s_manager->mIoDevices.end() && qit->second.info.is_openclose_inverted) ? 100.0f : 0.0f;
         s_manager->mIoDevicesMutex.unlock();
-        ok = s_manager->mIoHome->OpenDevice(deviceId, quiet);
+        ok = s_manager->OpenDevice(deviceId, quiet);
         if (ok) arm_move(target_pos);
     } else if (strcmp(action, "close") == 0) {
         s_manager->mIoDevicesMutex.lock();
@@ -573,23 +574,24 @@ static esp_err_t api_action_post(httpd_req_t *req)
         bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
         float target_pos = (qit != s_manager->mIoDevices.end() && qit->second.info.is_openclose_inverted) ? 0.0f : 100.0f;
         s_manager->mIoDevicesMutex.unlock();
-        ok = s_manager->mIoHome->CloseDevice(deviceId, quiet);
+        ok = s_manager->CloseDevice(deviceId, quiet);
         if (ok) arm_move(target_pos);
     } else if (strcmp(action, "stop") == 0) {
-        ok = s_manager->mIoHome->StopDevice(deviceId);
+        ok = s_manager->StopDevice(deviceId);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
+            bool is_2w = (it != s_manager->mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_2W);
             if (it != s_manager->mIoDevices.end()) it->second.move_start_us = 0;
             s_manager->mIoDevicesMutex.unlock();
-            s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f);
+            if (is_2w) s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f);
         }
     } else if (strcmp(action, "position") == 0 && value >= 0 && value <= 100) {
         s_manager->mIoDevicesMutex.lock();
         auto qit = s_manager->mIoDevices.find(deviceId);
         bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
         s_manager->mIoDevicesMutex.unlock();
-        ok = s_manager->mIoHome->SetDevicePosition(deviceId, (uint8_t)value, quiet);
+        ok = s_manager->SetDevicePosition(deviceId, (uint8_t)value, quiet);
         if (ok) arm_move((float)value);
     } else if (strcmp(action, "tilt") == 0 && value >= 0 && value <= 100) {
         ok = s_manager->mIoHome->SetDeviceTilt(deviceId, (uint8_t)value);
