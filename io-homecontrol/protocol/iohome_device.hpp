@@ -8,6 +8,8 @@
 
 namespace iohome
 {
+    enum class ProtocolMode : uint8_t { PROTO_2W = 0, PROTO_1W = 1 };
+
     constexpr float UNKNOWN_POSITION = 212.0;
     constexpr float SWITCH_LIGHT_ON_POSITION = 0.0;
     constexpr float SWITCH_LIGHT_OFF_POSITION = 100.0;
@@ -23,6 +25,9 @@ namespace iohome
         uint8_t device_subtype;              // Device sub-type
         bool is_openclose_inverted;          // Device OPEN/CLOSE is inverted (0 for CLOSED, 100 for OPEN)
         bool is_low_power;                   // Device is battery/solar powered (requires LOW_POWER flag in frames)
+        ProtocolMode protocol_mode = ProtocolMode::PROTO_2W; // 2W or 1W, fixed at pairing time
+        uint16_t     sequence_1w   = 0;                       // 1W rolling TX counter, persisted after every send
+        uint8_t      key_1w[AES_KEY_SIZE]  = {};              // 1W per-device AES key, generated at pairing
     };
 
     struct IoDevice
