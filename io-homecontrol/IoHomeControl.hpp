@@ -277,6 +277,13 @@ namespace iohome
     /// @return true if at least one query succeeded
     bool DeviceGetBattery(const std::string &deviceID);
 
+    /// @brief Transmit a frame — enqueues to the FreeRTOS TX queue (thread-safe).
+    /// @param frame IoFrame to transmit
+    /// @param frequency Frequency in Hz
+    /// @param preamble Preamble length in bits
+    /// @return true on success, false on error
+    bool TransmitFrame(const IoFrame &frame, uint32_t frequency, uint16_t preamble);
+
   protected:
     uint8_t mOwnNodeId[NODE_ID_SIZE]; // Our NodeID (3 bytes)
     uint8_t mSystemKey[AES_KEY_SIZE]; // Our system key (16 bytes)
@@ -286,13 +293,6 @@ namespace iohome
     bool mVerbose;     // true if verbose mode (logs are sent to registered callback)
     bool mPassiveMode; // true if passive mode (will not send frames to radio, only listening)
     bool mIgnoreAutoUpdate; // true to ignore auto-update flag (0x80) and use timer value instead
-
-    /// @brief Transmit a frame
-    /// @param frame IoFrame to transmit
-    /// @param frequency Frequency to transmit the frame
-    /// @param preamble preamble length before frame data
-    /// @return true on success, false on error
-    bool TransmitFrame(const IoFrame &frame, uint32_t frequency, uint16_t preamble);
 
     /// @brief Sends a provided request on specified frequency and provide a response in return. Manages authentication automatically.
     /// @warning You must take sMutex before calling!
