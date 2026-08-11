@@ -298,7 +298,7 @@ posSpan.textContent = device.position >= 0
 : posStateLabel(-1);
 body.appendChild(devRow(app.i18nText("popup.device_position", "Position"), null, posSpan));
 }
-if (hasFav) {
+if (hasFav && device.protocol !== "1w") {
 var invertToggle = document.createElement("div");
 invertToggle.className = "s-toggle" + (device.is_inverted ? " on" : "");
 invertToggle.onclick = function () {
@@ -317,7 +317,7 @@ app.i18nText("popup.invert_desc", "Swap which end counts as fully open."),
 invertToggle
 ));
 }
-if (hasPos) {
+if (hasPos && device.protocol !== "1w") {
 var quietToggle = document.createElement("div");
 quietToggle.className = "s-toggle" + (device.is_quiet ? " on" : "");
 quietToggle.onclick = function () {
@@ -396,47 +396,112 @@ transitSaveBtn.onclick = function () {
         .catch(function (e) { showToast(e.message, "error"); });
 };
 
-transitCalBtn.onclick = function () {
-    showTransitCalibrating("…");
-    window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "calibrate" })
-        .then(function (r) {
-            if (!r.success) { showTransitNormal(); showToast(r.message || "Calibration failed.", "error"); }
-        })
-        .catch(function (e) { showTransitNormal(); showToast(e.message, "error"); });
-};
-
-transitCancelBtn.onclick = function () {
-    showTransitNormal();
-    window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "cancelCalibration" })
-        .catch(function () {});
-};
-
-window.MiOpenDevices.onCalibrationProgress = function (data) {
-    if (data.id !== device.id) return;
-    showTransitCalibrating(data.message || "…");
-};
-window.MiOpenDevices.onCalibrationDone = function (data) {
-    if (data.id !== device.id) return;
-    var s = Math.round(data.transit_time_ms / 1000);
-    device.transit_time_ms = data.transit_time_ms;
-    transitInput.value = s;
-    if (transitRowSub) transitRowSub.textContent = app.i18nText("popup.transit_time_s", "{s} s").replace("{s}", s);
-    showTransitNormal();
-    showToast(app.i18nText("popup.transit_done", "Calibration done: {s} s").replace("{s}", s), "success");
-};
-window.MiOpenDevices.onCalibrationFailed = function (data) {
-    if (data.id !== device.id) return;
-    showTransitNormal();
-    var cancelled = data.reason === "cancelled";
-    showToast(
-        cancelled
-            ? app.i18nText("popup.transit_cancelled", "Calibration cancelled.")
-            : app.i18nText("popup.transit_failed", "Calibration failed."),
-        cancelled ? "info" : "error"
-    );
-};
+if (device.protocol === "1w") {
+    transitCalBtn.onclick = function () {
+        var startMs = null;
+        var extraBtns = [];
+        function clearExtra() { extraBtns.forEach(function (b) { if (b.parentNode) b.parentNode.removeChild(b); }); extraBtns = []; }
+        function insertBtn(text, cls, onClick) {
+            var b = devBtn(text, cls);
+            b.onclick = function () { clearExtra(); onClick(); };
+            transitCancelBtn.parentNode.insertBefore(b, transitCancelBtn);
+            extraBtns.push(b);
+        }
+        showTransitCalibrating("Step 1: click ↑ Open, wait for device to open fully.");
+        insertBtn("↑ Open", "primary", function () {
+            runAction(app, device.id, "open").catch(function () {});
+            showTransitCalibrating("Waiting… tap when fully open.");
+            insertBtn("✓ Open", "primary", function () {
+                startMs = Date.now();
+                showTransitCalibrating("Step 2: click ↓ Close, wait for device to close fully.");
+                insertBtn("↓ Close", "primary", function () {
+                    runAction(app, device.id, "close").catch(function () {});
+                    showTransitCalibrating("Waiting… tap when fully closed.");
+                    insertBtn("✓ Closed", "primary", function () {
+                        var ms = Date.now() - startMs;
+                        var s = Math.max(1, Math.round(ms / 1000));
+                        window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "setTransitTime", value: s })
+                            .then(function (r) {
+                                if (!r.success) { showToast(r.message || "Save failed.", "error"); showTransitNormal(); return; }
+                                device.transit_time_ms = s * 1000;
+                                transitInput.value = s;
+                                if (transitRowSub) transitRowSub.textContent = app.i18nText("popup.transit_time_s", "{s} s").replace("{s}", s);
+                                showTransitNormal();
+                                showToast("Calibration done: " + s + " s", "success");
+                            })
+                            .catch(function (e) { showToast(e.message, "error"); showTransitNormal(); });
+                    });
+                });
+            });
+        });
+    };
+    transitCancelBtn.onclick = function () { showTransitNormal(); };
+} else {
+    transitCalBtn.onclick = function () {
+        showTransitCalibrating("…");
+        window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "calibrate" })
+            .then(function (r) {
+                if (!r.success) { showTransitNormal(); showToast(r.message || "Calibration failed.", "error"); }
+            })
+            .catch(function (e) { showTransitNormal(); showToast(e.message, "error"); });
+    };
+    transitCancelBtn.onclick = function () {
+        showTransitNormal();
+        window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "cancelCalibration" })
+            .catch(function () {});
+    };
+    window.MiOpenDevices.onCalibrationProgress = function (data) {
+        if (data.id !== device.id) return;
+        showTransitCalibrating(data.message || "…");
+    };
+    window.MiOpenDevices.onCalibrationDone = function (data) {
+        if (data.id !== device.id) return;
+        var s = Math.round(data.transit_time_ms / 1000);
+        device.transit_time_ms = data.transit_time_ms;
+        transitInput.value = s;
+        if (transitRowSub) transitRowSub.textContent = app.i18nText("popup.transit_time_s", "{s} s").replace("{s}", s);
+        showTransitNormal();
+        showToast(app.i18nText("popup.transit_done", "Calibration done: {s} s").replace("{s}", s), "success");
+    };
+    window.MiOpenDevices.onCalibrationFailed = function (data) {
+        if (data.id !== device.id) return;
+        showTransitNormal();
+        var cancelled = data.reason === "cancelled";
+        showToast(
+            cancelled
+                ? app.i18nText("popup.transit_cancelled", "Calibration cancelled.")
+                : app.i18nText("popup.transit_failed", "Calibration failed."),
+            cancelled ? "info" : "error"
+        );
+    };
+}
 
 body.appendChild(transitRow);
+if (device.protocol === "1w") {
+var resetOpenBtn   = devBtn("0% — Open",    "");
+var resetClosedBtn = devBtn("100% — Closed", "");
+resetOpenBtn.onclick = function () {
+    window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "resetPosition1w", value: 0 })
+        .then(function (r) { if (r.success) { device.position = 0; showToast("Position reset to open.", "success"); } else showToast(r.message || "Failed.", "error"); })
+        .catch(function (e) { showToast(e.message, "error"); });
+};
+resetClosedBtn.onclick = function () {
+    window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "resetPosition1w", value: 100 })
+        .then(function (r) { if (r.success) { device.position = 100; showToast("Position reset to closed.", "success"); } else showToast(r.message || "Failed.", "error"); })
+        .catch(function (e) { showToast(e.message, "error"); });
+};
+body.appendChild(devRow("Reset position", "Force estimated position to a known state.", [resetOpenBtn, resetClosedBtn]));
+var winkBtn = devBtn("Put in pairing mode", "");
+winkBtn.onclick = function () {
+    window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "wink1w" })
+        .then(function (r) {
+            if (r.success) showToast("Device entering pairing mode. Now pair your other remote.", "success");
+            else showToast(r.message || "Failed.", "error");
+        })
+        .catch(function (e) { showToast(e.message, "error"); });
+};
+body.appendChild(devRow("Put in pairing mode", "Put the device in pairing acceptance mode so other remotes can pair with it.", winkBtn));
+}
 }
 if (hasFav) {
 var favPos = getFavPos(device.id);
@@ -457,6 +522,7 @@ showToast(t("popup.fav_saved", {pos: device.position}), "success");
 };
 body.appendChild(favRow);
 }
+if (device.protocol !== "1w") {
 var idBtn = devBtn(app.i18nText("button.identify", "Identify"), "");
 idBtn.onclick = function () {
 window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "identify" })
@@ -464,6 +530,7 @@ window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "identif
 .catch(function (e) { showToast(e.message, "error"); });
 };
 body.appendChild(devRow(app.i18nText("button.identify", "Identify"), app.i18nText("popup.device_identify_desc", "Triggers a brief movement to locate the device."), idBtn));
+}
 }
 var danger = document.createElement("div");
 danger.className = "dev-danger-zone";
@@ -490,6 +557,48 @@ app.i18nText("button.deactivate", "Deactivate"),
 app.i18nText("popup.deactivate_desc", "Keeps device in list but removes controls. Reversible."),
 deactivateBtn
 ));
+}
+if (device.protocol === "1w" && !device.inactive) {
+var unpairRow = devRow("Unpair", "Send REMOVE frame to the device, then confirm it responded before deleting from storage.", (function () {
+var btn = devBtn("Unpair device", "danger");
+btn.onclick = function () {
+btn.disabled = true;
+btn.textContent = "Sending…";
+window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "sendremove1w" })
+.then(function (r) {
+if (!r.success) { btn.disabled = false; btn.textContent = "Unpair device"; showToast(r.message || "Failed.", "error"); return; }
+var cell = btn.parentElement;
+cell.innerHTML = "";
+var msg = document.createElement("span");
+msg.style.cssText = "font-size:12px;color:var(--text2);";
+msg.textContent = "REMOVE sent — did the device confirm?";
+cell.appendChild(msg);
+var confirmBtn = devBtn("Confirmed ✓", "pair");
+var resendBtn  = devBtn("Resend", "");
+var cancelBtn  = devBtn("Cancel", "");
+confirmBtn.style.marginLeft = "6px";
+resendBtn.style.marginLeft  = "4px";
+cancelBtn.style.marginLeft  = "4px";
+confirmBtn.onclick = function () {
+window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "deactivateDevice" })
+.then(function () { return window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "deleteDevice" }); })
+.then(function () { showToast("Device removed.", "info"); closeDeviceEditModal(); fetchAndDisplayDevices(app); })
+.catch(function (e) { showToast(e.message, "error"); });
+};
+resendBtn.onclick = function () {
+resendBtn.disabled = true; resendBtn.textContent = "Sending…";
+window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "sendremove1w" })
+.then(function () { resendBtn.disabled = false; resendBtn.textContent = "Resend"; })
+.catch(function () { resendBtn.disabled = false; resendBtn.textContent = "Resend"; });
+};
+cancelBtn.onclick = function () { cell.innerHTML = ""; cell.appendChild(btn); btn.disabled = false; btn.textContent = "Unpair device"; };
+cell.appendChild(confirmBtn); cell.appendChild(resendBtn); cell.appendChild(cancelBtn);
+})
+.catch(function (e) { btn.disabled = false; btn.textContent = "Unpair device"; showToast(e.message, "error"); });
+};
+return btn;
+})());
+danger.appendChild(unpairRow);
 }
 var deleteBtn = devBtn(app.i18nText("button.delete", "Delete permanently"), "danger");
 deleteBtn.onclick = function () {
@@ -571,6 +680,12 @@ typeEl.className = "card-badge";
 typeEl.textContent = (device.type_name || "").toLowerCase();
 nameBlock.appendChild(nameEl);
 nameBlock.appendChild(typeEl);
+if (device.protocol === "1w") {
+var badge1w = document.createElement("span");
+badge1w.className = "card-badge badge-1w";
+badge1w.textContent = "1W";
+nameBlock.appendChild(badge1w);
+}
 var menuBtn = document.createElement("button");
 menuBtn.textContent = "⋯";
 menuBtn.className = "btn menu";
@@ -593,7 +708,7 @@ spacer.className = "card-spacer";
 li.appendChild(spacer);
 buildControls(app, device, li, group);
 if (device.position >= 0) {
-updateDeviceFill(device.id, device.position, !!device.is_inverted);
+updateDeviceFill(device.id, device.position, !!device.is_inverted, !!device.position_estimated);
 }
 updateDeviceState(device.id, device.is_stopped);
 }
@@ -648,6 +763,50 @@ btn.addEventListener("click", onClick); return btn;
 }
 function showStep1() {
 _pendingCaptureDeviceId = null; _scanning = false; hideBadge();
+_statusEl.innerHTML = "";
+var title = document.createElement("p");
+title.style.cssText = "font-size:13px;color:var(--text2);margin:0 0 12px;";
+title.textContent = "Choose the connection type for this device:";
+_statusEl.appendChild(title);
+function choiceCard(heading, lines, onClick) {
+    var card = document.createElement("div");
+    card.style.cssText = "background:var(--surface2);border:1px solid var(--separator);border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:border-color .15s,background .15s;";
+    card.onmouseenter = function () { card.style.background = "var(--surface3)"; card.style.borderColor = "var(--blue,#5b9ecf)"; };
+    card.onmouseleave = function () { card.style.background = "var(--surface2)"; card.style.borderColor = "var(--separator)"; };
+    card.onclick = onClick;
+    var h = document.createElement("div");
+    h.style.cssText = "font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;";
+    h.textContent = heading;
+    card.appendChild(h);
+    lines.forEach(function (line) {
+        var p = document.createElement("div");
+        p.style.cssText = "font-size:12px;color:var(--text2);line-height:1.45;";
+        p.textContent = line;
+        card.appendChild(p);
+    });
+    return card;
+}
+_statusEl.appendChild(choiceCard(
+    "2W — Bidirectional (most devices)",
+    [
+        "The device reports its real position back to the controller.",
+        "Supports auto-calibration and accurate position tracking.",
+        "Required for Somfy RS100 IO, Velux, and similar modern motors."
+    ],
+    show2wDiscovery
+));
+_statusEl.appendChild(choiceCard(
+    "1W — Simplex (TX only)",
+    [
+        "Commands are sent only; the device never replies.",
+        "Position is estimated by a timer — manual calibration needed.",
+        "Used for older or budget motors that do not send status."
+    ],
+    show1wWizard
+));
+setButtons([makeBtn(_app.i18nText("button.cancel", "Cancel"), "danger", cancel)]);
+}
+function show2wDiscovery() {
 setStatus(_app.i18nText("popup.pair_step1_text", "Put the device into pairing mode, then press Start."));
 setButtons([
 makeBtn(_app.i18nText("button.start_discovery", "Start Discovery"), "pair", function () {
@@ -660,7 +819,84 @@ setStatus(_app.i18nText("popup.pair_failed", "Pairing request failed.") + " " + 
 showRetry();
 });
 }),
+makeBtn("Back", "", showStep1),
 makeBtn(_app.i18nText("button.cancel", "Cancel"), "danger", cancel)
+]);
+}
+function show1wWizard() {
+_statusEl.innerHTML = "";
+var desc = document.createElement("p");
+desc.style.cssText = "font-size:13px;color:var(--text2);margin:0 0 10px;line-height:1.5;";
+desc.textContent = "Put device in pairing mode (hold programming button until LED blinks), enter a name, then click Pair.";
+_statusEl.appendChild(desc);
+var nameInput = document.createElement("input");
+nameInput.type = "text"; nameInput.placeholder = "Device name"; nameInput.maxLength = 31;
+nameInput.style.cssText = "width:100%;background:var(--input-bg,var(--surface2));border:1px solid var(--input-border,var(--surface3));border-radius:7px;color:var(--text);padding:8px 12px;font-size:13px;font-family:inherit;outline:none;margin-bottom:6px;display:block;box-sizing:border-box;";
+_statusEl.appendChild(nameInput);
+function selRow(label, opts) {
+var row = document.createElement("div");
+row.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:6px;";
+var lbl = document.createElement("span");
+lbl.style.cssText = "font-size:11px;color:var(--text3);width:90px;flex-shrink:0;";
+lbl.textContent = label;
+var sel = document.createElement("select");
+sel.style.cssText = "flex:1;background:var(--input-bg,var(--surface2));border:1px solid var(--input-border,var(--surface3));border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;font-family:inherit;";
+opts.forEach(function (o) { var op = document.createElement("option"); op.value = o[0]; op.textContent = o[1]; sel.appendChild(op); });
+row.appendChild(lbl); row.appendChild(sel);
+_statusEl.appendChild(row);
+return sel;
+}
+var typeSelect = selRow("Device type", [[0,"All types (default)"],[2,"Roller shutter"],[3,"Awning"],[10,"Blind"]]);
+var mfrSelect  = selRow("Manufacturer",  [[2,"Somfy (default)"],[1,"Velux"]]);
+setTimeout(function () { nameInput.focus(); }, 50);
+setButtons([
+makeBtn("Pair", "pair", function () {
+var name = nameInput.value.trim();
+if (!name) { nameInput.style.borderColor = "var(--red,#c0392b)"; nameInput.focus(); return; }
+setStatus("Sending pairing frames…");
+setButtons([]);
+window.MiOpenApi.postJson("/api/action", { action: "pair1w", name: name, deviceType: parseInt(typeSelect.value, 10), manufacturer: parseInt(mfrSelect.value, 10) })
+.then(function (r) {
+if (r && r.success && r.deviceId) {
+showPairConfirm(r.deviceId, name);
+} else {
+setStatus("Pairing failed — is the device in pairing mode?");
+setButtons([makeBtn("Retry", "pair", show1wWizard), makeBtn("Cancel", "danger", cancel)]);
+}
+})
+.catch(function (e) {
+setStatus("Error: " + (e.message || "Unknown error"));
+setButtons([makeBtn("Retry", "pair", show1wWizard), makeBtn("Cancel", "danger", cancel)]);
+});
+}),
+makeBtn("Back", "", showStep1),
+makeBtn("Cancel", "danger", cancel)
+]);
+}
+function showPairConfirm(deviceId, name) {
+setStatus("Pairing frames sent.<br><br>Did the device confirm? (brief jog movement or LED blink)");
+function doResend() {
+setStatus("Resending…");
+setButtons([]);
+window.MiOpenApi.postJson("/api/action", { deviceId: deviceId, action: "sendpair1w" })
+.then(function () { showPairConfirm(deviceId, name); })
+.catch(function (e) { showPairConfirm(deviceId, name); });
+}
+function doConfirm() {
+setStatus("✓ Paired: <strong>" + name + "</strong>");
+setButtons([makeBtn("Done", "", cancel)]);
+fetchAndDisplayDevices(_app);
+}
+function doCancel() {
+window.MiOpenApi.postJson("/api/action", { deviceId: deviceId, action: "deactivateDevice" })
+.then(function () { return window.MiOpenApi.postJson("/api/action", { deviceId: deviceId, action: "deleteDevice" }); })
+.catch(function () {})
+.finally(function () { cancel(); });
+}
+setButtons([
+makeBtn("Confirmed ✓", "pair", doConfirm),
+makeBtn("Resend", "", doResend),
+makeBtn("Cancel", "danger", doCancel)
 ]);
 }
 function showRetry() {

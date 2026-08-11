@@ -607,7 +607,7 @@ namespace IoRts
                 mIoHome->SetIgnoreAutoUpdate(IoHomeConfig::isIgnoreAutoUpdateEnabled());
                 mIoHome->Begin(IoHomeConfig::GetIoNodeId(), IoHomeConfig::GetIoSystemKey(), IoHomeConfig::isPassiveModeEnabled());
                 mIoHome->ConfigureRadio(IoHomeConfig::GetTxPower());
-                mIo1W = new iohome::Io1WControl(mIoHome, IoHomeConfig::GetIoNodeId());
+                mIo1W = new iohome::Io1WControl(mIoHome);
                 mIoHome->SetUnknownSenderCallback(unknownSenderCallback);
                 mIoHome->SetKeySniffCallback(keySniffCallback);
                 mIoHome->SetMovementStartedCallback([](const std::string &deviceID, uint32_t transit_ms, float dist) {
@@ -699,7 +699,7 @@ namespace IoRts
         if (is1w && mIo1W)
         {
             mIoDevicesMutex.lock();
-            bool ok = mIo1W->Send(mIoDevices.at(deviceID).info, cur_pos);
+            bool ok = mIo1W->Stop(mIoDevices.at(deviceID).info);
             mIoDevicesMutex.unlock();
             if (ok) SaveDevice1WSequence(deviceID);
             return ok;
@@ -763,6 +763,81 @@ namespace IoRts
 
         ESP_LOGI("IoRtsManager", "Pair1WDevice: paired '%s' as %s", name.c_str(), id_str);
         return id_str;
+    }
+
+    bool IoRtsManager::ReSendPair1W(const std::string &deviceID)
+    {
+        if (!mIo1W) return false;
+
+        iohome::IoDeviceInformation snap;
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it == mIoDevices.end() || it->second.info.protocol_mode != iohome::ProtocolMode::PROTO_1W)
+                return false;
+            snap = it->second.info;
+        }
+
+        bool ok = mIo1W->ReSendPair(snap);
+
+        if (ok) {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it != mIoDevices.end())
+                it->second.info.sequence_1w = snap.sequence_1w;
+        }
+        if (ok) SaveDevice1WSequence(deviceID);
+        return ok;
+    }
+
+    bool IoRtsManager::Wink1WDevice(const std::string &deviceID)
+    {
+        if (!mIo1W) return false;
+
+        iohome::IoDeviceInformation snap;
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it == mIoDevices.end() || it->second.info.protocol_mode != iohome::ProtocolMode::PROTO_1W)
+                return false;
+            snap = it->second.info;
+        }
+
+        bool ok = mIo1W->WinkDevice(snap);
+
+        if (ok) {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it != mIoDevices.end())
+                it->second.info.sequence_1w = snap.sequence_1w;
+        }
+        if (ok) SaveDevice1WSequence(deviceID);
+        return ok;
+    }
+
+    bool IoRtsManager::SendRemove1W(const std::string &deviceID)
+    {
+        if (!mIo1W) return false;
+
+        iohome::IoDeviceInformation snap;
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it == mIoDevices.end() || it->second.info.protocol_mode != iohome::ProtocolMode::PROTO_1W)
+                return false;
+            snap = it->second.info;
+        }
+
+        bool ok = mIo1W->UnpairDevice(snap);
+
+        if (ok) {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it != mIoDevices.end())
+                it->second.info.sequence_1w = snap.sequence_1w;
+        }
+        if (ok) SaveDevice1WSequence(deviceID);
+        return ok;
     }
 
     bool IoRtsManager::Unpair1WDevice(const std::string &deviceID)

@@ -96,6 +96,12 @@ namespace IoRts
 
         /// @brief Pair a new 1W device. Device must be in pairing mode. Returns new device ID or empty on failure.
         std::string Pair1WDevice(const std::string &name, iohome::DeviceType type, iohome::Manufacturer manufacturer);
+        /// @brief Resend the ADD frame for an existing 1W device using its stored key. Device must be in pairing mode.
+        bool ReSendPair1W(const std::string &deviceID);
+        /// @brief Send DISCOVER (0x2E) from the device's paired remote — puts the motor in pairing mode so another remote can pair without physical button.
+        bool Wink1WDevice(const std::string &deviceID);
+        /// @brief Send REMOVE (0x39) without deleting from storage — lets the caller confirm receipt before deleting.
+        bool SendRemove1W(const std::string &deviceID);
         /// @brief Unpair a 1W device: sends REMOVE frame and deletes from storage.
         bool Unpair1WDevice(const std::string &deviceID);
 

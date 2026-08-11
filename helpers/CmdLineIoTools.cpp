@@ -1119,10 +1119,14 @@ static int do_io1wpair_cmd(int argc, char **argv)
         arg_print_errors(stderr, io1wpair_args.end, argv[0]);
         return 1;
     }
-    std::string id = sIoRtsManager->Pair1WDevice(
-        io1wpair_args.name->sval[0],
-        static_cast<iohome::DeviceType>(io1wpair_args.type->ival[0]),
-        static_cast<iohome::Manufacturer>(io1wpair_args.manufacturer->ival[0]));
+    // Type 0 = broadcast to all device types (00003F); Somfy is the common manufacturer
+    iohome::DeviceType type = (io1wpair_args.type->count > 0)
+        ? static_cast<iohome::DeviceType>(io1wpair_args.type->ival[0])
+        : iohome::DeviceType::UNKNOWN;
+    iohome::Manufacturer mfr = (io1wpair_args.manufacturer->count > 0)
+        ? static_cast<iohome::Manufacturer>(io1wpair_args.manufacturer->ival[0])
+        : iohome::Manufacturer::SOMFY;
+    std::string id = sIoRtsManager->Pair1WDevice(io1wpair_args.name->sval[0], type, mfr);
     if (id.empty())
         ESP_LOGE(TAG, "io_1w_pair: pairing failed");
     else
@@ -1133,12 +1137,12 @@ static int do_io1wpair_cmd(int argc, char **argv)
 static void register_io1wpair(void)
 {
     io1wpair_args.name         = arg_str1(NULL, NULL, "<name>",         "Device name (max 31 chars)");
-    io1wpair_args.type         = arg_int1(NULL, NULL, "<type>",         "Device type (1=BLIND 2=ROLLER_SHUTTER 3=AWNING)");
-    io1wpair_args.manufacturer = arg_int1(NULL, NULL, "<manufacturer>", "Manufacturer (1=SOMFY 2=VELUX)");
+    io1wpair_args.type         = arg_int0(NULL, NULL, "<type>",         "Device type (default 0=all; 2=ROLLER_SHUTTER 3=AWNING 10=BLIND)");
+    io1wpair_args.manufacturer = arg_int0(NULL, NULL, "<manufacturer>", "Manufacturer (default 2=SOMFY; 1=VELUX)");
     io1wpair_args.end          = arg_end(4);
     const esp_console_cmd_t cmd = {
         .command = "io_1w_pair",
-        .help    = "Pair a 1W (simplex) device. Device must be in pairing mode. Args: <name> <type> <manufacturer>",
+        .help    = "Pair a 1W (simplex) device. Device must be in pairing mode. Args: <name> [type] [manufacturer]",
         .hint    = NULL,
         .func    = &do_io1wpair_cmd,
         .argtable = &io1wpair_args,

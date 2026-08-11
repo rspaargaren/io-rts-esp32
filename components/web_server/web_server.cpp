@@ -407,11 +407,10 @@ static esp_err_t static_file_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, content_type_for(filepath));
     if (serve_gz) httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    // Cache versioned assets; revalidate HTML/JSON so updated content is always fetched
+    // JS/CSS change on every web upload — always revalidate. Images/icons are stable.
     {
         const char *ext = strrchr(filepath, '.');
-        if (ext && (strcmp(ext, ".css") == 0 || strcmp(ext, ".js") == 0 ||
-                    strcmp(ext, ".png") == 0 || strcmp(ext, ".svg") == 0 ||
+        if (ext && (strcmp(ext, ".png") == 0 || strcmp(ext, ".svg") == 0 ||
                     strcmp(ext, ".ico") == 0)) {
             httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000, immutable");
         } else {
@@ -463,6 +462,9 @@ static esp_err_t api_devices_get(httpd_req_t *req)
             iohome::deviceTypeSupportsTilt(dev.info.device_type));
 
         cJSON_AddNumberToObject(obj, "transit_time_ms", dev.transit_time_ms);
+        bool is1w = (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+        cJSON_AddStringToObject(obj, "protocol", is1w ? "1w" : "2w");
+        cJSON_AddBoolToObject(obj, "position_estimated", is1w);
 
         cJSON_AddItemToArray(arr, obj);
     }
@@ -532,6 +534,7 @@ static esp_err_t api_action_post(httpd_req_t *req)
     cJSON *jAction   = cJSON_GetObjectItem(json, "action");
     cJSON *jValue    = cJSON_GetObjectItem(json, "value");
     cJSON *jRemoteId = cJSON_GetObjectItem(json, "remoteId");
+    cJSON *jName     = cJSON_GetObjectItem(json, "name");
 
     const char *action   = cJSON_IsString(jAction)   ? jAction->valuestring   : "";
     const char *deviceId = cJSON_IsString(jDeviceId) ? jDeviceId->valuestring : "";
@@ -639,6 +642,55 @@ static esp_err_t api_action_post(httpd_req_t *req)
                 cJSON_Delete(json);
                 send_result(req, false, "Deactivate the device first before deleting.");
                 return ESP_OK;
+            }
+        }
+    } else if (strcmp(action, "sendpair1w") == 0) {
+        if (strlen(deviceId) > 0)
+            ok = s_manager->ReSendPair1W(deviceId);
+    } else if (strcmp(action, "wink1w") == 0) {
+        if (strlen(deviceId) > 0)
+            ok = s_manager->Wink1WDevice(deviceId);
+    } else if (strcmp(action, "sendremove1w") == 0) {
+        if (strlen(deviceId) > 0)
+            ok = s_manager->SendRemove1W(deviceId);
+    } else if (strcmp(action, "unpair1w") == 0) {
+        if (strlen(deviceId) > 0)
+            ok = s_manager->Unpair1WDevice(deviceId);
+    } else if (strcmp(action, "pair1w") == 0) {
+        const char *name = cJSON_IsString(jName) ? jName->valuestring : "";
+        if (strlen(name) > 0) {
+            cJSON *jType = cJSON_GetObjectItem(json, "deviceType");
+            cJSON *jMfr  = cJSON_GetObjectItem(json, "manufacturer");
+            auto type = cJSON_IsNumber(jType)
+                ? static_cast<iohome::DeviceType>((int)jType->valuedouble)
+                : iohome::DeviceType::UNKNOWN;
+            auto mfr = cJSON_IsNumber(jMfr)
+                ? static_cast<iohome::Manufacturer>((int)jMfr->valuedouble)
+                : iohome::Manufacturer::SOMFY;
+            std::string newId = s_manager->Pair1WDevice(name, type, mfr);
+            if (!newId.empty()) {
+                cJSON_Delete(json);
+                cJSON *resp = cJSON_CreateObject();
+                cJSON_AddBoolToObject(resp, "success", true);
+                cJSON_AddStringToObject(resp, "deviceId", newId.c_str());
+                char *respStr = cJSON_PrintUnformatted(resp);
+                cJSON_Delete(resp);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_sendstr(req, respStr);
+                free(respStr);
+                return ESP_OK;
+            }
+        }
+    } else if (strcmp(action, "resetPosition1w") == 0) {
+        if (strlen(deviceId) > 0 && (value == 0 || value == 100)) {
+            std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
+            auto it = s_manager->mIoDevices.find(deviceId);
+            if (it != s_manager->mIoDevices.end() &&
+                it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_1W) {
+                it->second.position      = (float)value;
+                it->second.move_start_us = 0;
+                it->second.is_stopped    = true;
+                ok = true;
             }
         }
     } else if (strcmp(action, "setTransitTime") == 0) {
