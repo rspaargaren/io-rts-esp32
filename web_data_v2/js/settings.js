@@ -1,3 +1,172 @@
+// ── iohomecontrol import ──────────────────────────────────────────────────────
+(function () {
+    function g(id) { return document.getElementById(id); }
+
+    function ss(id, msg, ok) {
+        var el = g(id);
+        if (!el) return;
+        el.textContent = msg;
+        el.style.color = ok === true ? "var(--green)" : ok === false ? "var(--red)" : "";
+    }
+
+    function initDevicesImport() {
+        var btn = g("iohc-devices-btn");
+        var fi  = g("iohc-devices-file");
+        if (!btn || !fi) return;
+        btn.addEventListener("click", function () { fi.click(); });
+        fi.addEventListener("change", function () {
+            var f = fi.files[0];
+            if (!f) return;
+            var rd = new FileReader();
+            rd.onload = function (ev) {
+                var data;
+                try { data = JSON.parse(ev.target.result); } catch (e) {
+                    ss("iohc-devices-status", "Invalid JSON", false);
+                    fi.value = "";
+                    return;
+                }
+                ss("iohc-devices-status", "Uploading…");
+                var h = Object.assign({ "Content-Type": "application/json" },
+                    (window.MiOpenApi.otaKey ? { "X-OTA-Key": window.MiOpenApi.otaKey } : {}));
+                fetch("/api/upload/iohomecontrol", { method: "POST", headers: h, body: JSON.stringify(data) })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) { ss("iohc-devices-status", d.message || "Done", d.success); if (d.success) showToast(d.message, "success"); else showToast(d.message || "Import failed", "error"); })
+                    .catch(function (e) { ss("iohc-devices-status", e.message, false); });
+                fi.value = "";
+            };
+            rd.readAsText(f);
+        });
+    }
+
+    function initRemotesImport() {
+        var btn   = g("iohc-remotes-btn");
+        var fi    = g("iohc-remotes-file");
+        var table = g("iohc-remotes-table");
+        if (!btn || !fi || !table) return;
+        btn.addEventListener("click", function () { fi.click(); });
+        fi.addEventListener("change", function () {
+            var f = fi.files[0];
+            if (!f) return;
+            var rd = new FileReader();
+            rd.onload = async function (ev) {
+                var data;
+                try { data = JSON.parse(ev.target.result); } catch (e) {
+                    ss("iohc-remotes-status", "Invalid JSON", false);
+                    fi.value = "";
+                    return;
+                }
+                // Fetch current devices for dropdown
+                var devices = [];
+                try {
+                    var r = await window.MiOpenApi.requestJson("/api/devices");
+                    devices = (r.devices || []).filter(function (d) { return !d.inactive; });
+                } catch (e) {
+                    ss("iohc-remotes-status", "Could not fetch devices", false);
+                    fi.value = "";
+                    return;
+                }
+                renderRemotesTable(data, devices, table);
+                ss("iohc-remotes-status", "");
+            };
+            rd.readAsText(f);
+            fi.value = "";
+        });
+    }
+
+    function renderRemotesTable(remotesData, devices, container) {
+        container.innerHTML = "";
+        container.style.display = "";
+
+        var remoteIds = Object.keys(remotesData);
+        if (remoteIds.length === 0) {
+            container.innerHTML = "<p style='color:var(--text3);font-size:12px;'>No remotes found in file.</p>";
+            return;
+        }
+
+        var tbl = document.createElement("table");
+        tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+        var thead = tbl.createTHead();
+        var hrow = thead.insertRow();
+        ["Remote", "Node ID", "Link to device"].forEach(function (h) {
+            var th = document.createElement("th");
+            th.textContent = h;
+            th.style.cssText = "text-align:left;padding:4px 6px;border-bottom:1px solid var(--border);color:var(--text3);font-weight:600;";
+            hrow.appendChild(th);
+        });
+
+        var tbody = tbl.createTBody();
+        var selects = {};
+        remoteIds.forEach(function (rid) {
+            var entry = remotesData[rid] || {};
+            var tr = tbody.insertRow();
+            [entry.name || rid, rid].forEach(function (txt) {
+                var td = tr.insertCell();
+                td.textContent = txt;
+                td.style.cssText = "padding:4px 6px;border-bottom:1px solid var(--border);";
+            });
+            var td = tr.insertCell();
+            td.style.cssText = "padding:4px 6px;border-bottom:1px solid var(--border);";
+            var sel = document.createElement("select");
+            sel.style.cssText = "width:100%;font-size:12px;";
+            var opt0 = document.createElement("option");
+            opt0.value = "";
+            opt0.textContent = "— don't link —";
+            sel.appendChild(opt0);
+            devices.forEach(function (dev) {
+                var opt = document.createElement("option");
+                opt.value = dev.id;
+                opt.textContent = (dev.name || dev.id) + " (" + dev.id + ")";
+                sel.appendChild(opt);
+            });
+            td.appendChild(sel);
+            selects[rid] = sel;
+        });
+        container.appendChild(tbl);
+
+        var confirmBtn = document.createElement("button");
+        confirmBtn.className = "s-btn primary";
+        confirmBtn.textContent = "Link remotes";
+        confirmBtn.style.marginTop = "8px";
+        confirmBtn.addEventListener("click", async function () {
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = "Linking…";
+            var payload = {};
+            Object.keys(selects).forEach(function (rid) {
+                var devId = selects[rid].value;
+                if (devId) payload[rid] = [devId];
+            });
+            var linked = Object.keys(payload).length;
+            if (linked === 0) {
+                showToast("No remotes linked.", "info");
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = "Link remotes";
+                return;
+            }
+            try {
+                var h = Object.assign({ "Content-Type": "application/json" },
+                    (window.MiOpenApi.otaKey ? { "X-OTA-Key": window.MiOpenApi.otaKey } : {}));
+                var fd = new FormData();
+                fd.append("file", new Blob([JSON.stringify(payload)], { type: "application/json" }), "remotes.json");
+                var r = await fetch("/api/upload/remotes", { method: "POST", headers: (window.MiOpenApi.otaKey ? { "X-OTA-Key": window.MiOpenApi.otaKey } : {}), body: fd });
+                var d = await r.json();
+                showToast(d.message || "Remotes linked.", d.success ? "success" : "error");
+                if (d.success) { container.innerHTML = ""; container.style.display = "none"; }
+            } catch (e) {
+                showToast("Error: " + e.message, "error");
+            }
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "Link remotes";
+        });
+        container.appendChild(confirmBtn);
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        initDevicesImport();
+        initRemotesImport();
+    });
+})();
+
+// ── Settings view ─────────────────────────────────────────────────────────────
 (function () {
     function g(id) { return document.getElementById(id); }
 

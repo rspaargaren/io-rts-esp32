@@ -2235,6 +2235,115 @@ static esp_err_t api_upload_remotes(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── POST /api/upload/iohomecontrol ─────────────────────────────────────────
+// Accepts an iohomecontrol backup devices JSON: object keyed by node_id hex,
+// each value: {key, sequence, type, manufacturer_id, name, travel_time, paired}
+
+static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+    char *body = nullptr;
+    if (read_body_large(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body (too large or bad format?)"); return ESP_OK; }
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        send_result(req, false, "Invalid JSON: expected object keyed by node_id");
+        return ESP_OK;
+    }
+
+    std::map<std::string, Helpers::StoredIoDevice> allDevices;
+    Helpers::DeviceStorage::LoadAllIoDevices(allDevices);
+
+    int imported = 0;
+    int skipped  = 0;
+    for (cJSON *entry = root->child; entry; entry = entry->next)
+    {
+        const char *nodeIdStr = entry->string;
+        if (!nodeIdStr || strlen(nodeIdStr) != 6 || !cJSON_IsObject(entry)) { skipped++; continue; }
+
+        // Parse key_1w (32 hex chars → 16 bytes)
+        cJSON *keyItem = cJSON_GetObjectItem(entry, "key");
+        if (!cJSON_IsString(keyItem) || strlen(keyItem->valuestring) != 32) { skipped++; continue; }
+
+        Helpers::StoredIoDevice sd = {};
+        iohome::IoDevice &dev = sd.device;
+        dev.position = iohome::UNKNOWN_POSITION;
+        dev.target   = iohome::UNKNOWN_POSITION;
+        dev.tilt     = iohome::UNKNOWN_POSITION;
+        dev.is_stopped = true;
+
+        // node_id
+        for (int i = 0; i < iohome::NODE_ID_SIZE; i++)
+        {
+            char byte[3] = {nodeIdStr[i * 2], nodeIdStr[i * 2 + 1], 0};
+            dev.info.node_id[i] = (uint8_t)strtoul(byte, nullptr, 16);
+        }
+
+        // key_1w
+        const char *ks = keyItem->valuestring;
+        for (int i = 0; i < iohome::AES_KEY_SIZE; i++)
+        {
+            char byte[3] = {ks[i * 2], ks[i * 2 + 1], 0};
+            dev.info.key_1w[i] = (uint8_t)strtoul(byte, nullptr, 16);
+        }
+
+        dev.info.protocol_mode = iohome::ProtocolMode::PROTO_1W;
+
+        // sequence
+        cJSON *seqItem = cJSON_GetObjectItem(entry, "sequence");
+        dev.info.sequence_1w = cJSON_IsNumber(seqItem) ? (uint16_t)(int)seqItem->valuedouble : 1;
+
+        // device type
+        cJSON *typeItem = cJSON_GetObjectItem(entry, "type");
+        dev.info.device_type = cJSON_IsNumber(typeItem)
+            ? static_cast<iohome::DeviceType>((uint8_t)typeItem->valuedouble)
+            : iohome::DeviceType::UNKNOWN;
+
+        // manufacturer
+        cJSON *mfItem = cJSON_GetObjectItem(entry, "manufacturer_id");
+        dev.info.manufacturer = cJSON_IsNumber(mfItem)
+            ? static_cast<iohome::Manufacturer>((uint8_t)mfItem->valuedouble)
+            : iohome::Manufacturer::SOMFY;
+
+        // name (fall back to node_id if absent)
+        cJSON *nameItem = cJSON_GetObjectItem(entry, "name");
+        if (cJSON_IsString(nameItem) && nameItem->valuestring[0])
+            strncpy(dev.info.name, nameItem->valuestring, iohome::CMD_PARAM_NAME_MAXSIZE - 1);
+        else
+            strncpy(dev.info.name, nodeIdStr, iohome::CMD_PARAM_NAME_MAXSIZE - 1);
+
+        // transit_time_ms: travel_time in iohomecontrol is stored in seconds
+        cJSON *ttItem = cJSON_GetObjectItem(entry, "travel_time");
+        if (cJSON_IsNumber(ttItem) && ttItem->valuedouble > 0)
+            sd.transit_time_ms = (uint32_t)(ttItem->valuedouble * 1000.0);
+
+        // is_low_power: default true for 1W motors (most are battery/solar)
+        dev.info.is_low_power = true;
+
+        std::string deviceID(nodeIdStr);
+        allDevices[deviceID] = sd;
+
+        // Register in live device map
+        {
+            std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
+            auto it = s_manager->mIoDevices.find(deviceID);
+            if (it != s_manager->mIoDevices.end()) it->second = sd.device;
+            else s_manager->mIoDevices.insert({deviceID, sd.device});
+        }
+
+        imported++;
+    }
+    cJSON_Delete(root);
+    Helpers::DeviceStorage::SaveAllIoDevices(allDevices);
+
+    char msg[80];
+    snprintf(msg, sizeof(msg), "Imported %d device(s), skipped %d. Reboot to fully apply.", imported, skipped);
+    send_result(req, true, msg);
+    return ESP_OK;
+}
+
 // ─── GET /api/backup ────────────────────────────────────────────────────────
 
 static esp_err_t api_backup_get(httpd_req_t *req)
@@ -3395,8 +3504,9 @@ void web_server_start(void *ioRtsManager)
     reg("/api/syslog/ping",       HTTP_POST, api_syslog_ping_post);
     reg("/api/download/devices",  HTTP_GET,  api_download_devices);
     reg("/api/download/remotes",  HTTP_GET,  api_download_remotes);
-    reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
-    reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
+    reg("/api/upload/devices",        HTTP_POST, api_upload_devices);
+    reg("/api/upload/remotes",        HTTP_POST, api_upload_remotes);
+    reg("/api/upload/iohomecontrol",  HTTP_POST, api_upload_iohomecontrol);
     reg("/api/ota",               HTTP_POST, api_ota_post);
     reg("/api/ota/url",           HTTP_POST, api_ota_url_post);
     reg("/api/ota/web",           HTTP_POST, api_ota_web_post);

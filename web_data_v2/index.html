@@ -556,6 +556,32 @@
               </div>
             </div>
           </div>
+          <!-- Import iohomecontrol backup -->
+          <div class="acc-row" id="iohc-import-row">
+            <div class="acc-head">
+              <span class="row-label">Import iohomecontrol</span>
+              <div class="acc-summary">
+                <span class="acc-sum-hint">Devices &amp; remotes from backup</span>
+              </div>
+              <div class="acc-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+            </div>
+            <div class="acc-body">
+              <div class="acc-body-inner">
+                <div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Import 1W devices and remotes from an iohomecontrol backup file. Existing devices with the same ID are overwritten.</div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+                  <button class="s-btn" id="iohc-devices-btn">Import Devices JSON</button>
+                  <input type="file" id="iohc-devices-file" accept=".json" style="display:none">
+                  <span id="iohc-devices-status" class="field-status"></span>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                  <button class="s-btn" id="iohc-remotes-btn">Import Remotes JSON</button>
+                  <input type="file" id="iohc-remotes-file" accept=".json" style="display:none">
+                  <span id="iohc-remotes-status" class="field-status"></span>
+                </div>
+                <div id="iohc-remotes-table" style="margin-top:10px;display:none;"></div>
+              </div>
+            </div>
+          </div>
           <!-- Reboot (flat) -->
           <div class="settings-row">
             <span class="row-label danger" id="reboot-btn" data-i18n="settings.row.reboot" style="cursor:pointer;">Reboot Device</span>
