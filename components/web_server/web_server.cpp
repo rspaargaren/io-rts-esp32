@@ -2303,18 +2303,16 @@ static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
             dev.info.sequence_1w = 1;
         }
 
-        // device type — stored as a JSON array [typeCode] in iohomecontrol backups
-        cJSON *typeItem = cJSON_GetObjectItem(entry, "type");
-        if (cJSON_IsArray(typeItem) && cJSON_GetArraySize(typeItem) > 0) {
-            cJSON *first = cJSON_GetArrayItem(typeItem, 0);
-            dev.info.device_type = cJSON_IsNumber(first)
-                ? static_cast<iohome::DeviceType>((uint8_t)first->valuedouble)
-                : iohome::DeviceType::UNKNOWN;
-        } else if (cJSON_IsNumber(typeItem)) {
-            dev.info.device_type = static_cast<iohome::DeviceType>((uint8_t)typeItem->valuedouble);
-        } else {
-            dev.info.device_type = iohome::DeviceType::UNKNOWN;
-        }
+        // The iohomecontrol "type" field is a broadcast-target routing code {0,0},
+        // not the io-homecontrol DeviceType enum — the two numbering systems are
+        // unrelated. Default to ROLLER_SHUTTER so the UI shows open/close/stop/
+        // position controls for all imported devices. The user can adjust per-device
+        // if needed. A numeric "device_type" override is still accepted for tools
+        // that export the correct enum value.
+        cJSON *typeOverride = cJSON_GetObjectItem(entry, "device_type");
+        dev.info.device_type = cJSON_IsNumber(typeOverride)
+            ? static_cast<iohome::DeviceType>((uint8_t)typeOverride->valuedouble)
+            : iohome::DeviceType::ROLLER_SHUTTER;
 
         // manufacturer
         cJSON *mfItem = cJSON_GetObjectItem(entry, "manufacturer_id");
