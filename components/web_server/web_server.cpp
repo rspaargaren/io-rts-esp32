@@ -454,6 +454,7 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddNumberToObject(obj, "subtype", dev.info.device_subtype);
         cJSON_AddStringToObject(obj, "manufacturer",
             iohome::IoDeviceManufacturer(dev.info.manufacturer).c_str());
+        cJSON_AddNumberToObject(obj, "manufacturer_id", (uint8_t)dev.info.manufacturer);
         cJSON_AddBoolToObject(obj, "is_low_power",  dev.info.is_low_power);
         cJSON_AddBoolToObject(obj, "is_stopped",    dev.is_stopped);
         cJSON_AddBoolToObject(obj, "is_inverted",   dev.info.is_openclose_inverted);
@@ -709,6 +710,42 @@ static esp_err_t api_action_post(httpd_req_t *req)
     } else if (strcmp(action, "cancelCalibration") == 0) {
         s_cal_cancel = true;
         ok = true;
+    } else if (strcmp(action, "setDeviceType") == 0) {
+        if (strlen(deviceId) > 0 && value >= 0 && value <= 0x18) {
+            {
+                std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
+                auto it = s_manager->mIoDevices.find(deviceId);
+                if (it != s_manager->mIoDevices.end()) {
+                    it->second.info.device_type = static_cast<iohome::DeviceType>((uint8_t)value);
+                    ok = true;
+                }
+            }
+            if (ok) {
+                Helpers::StoredIoDevice stored;
+                if (Helpers::DeviceStorage::LoadIoDevice(deviceId, stored) == ESP_OK) {
+                    stored.device.info.device_type = static_cast<iohome::DeviceType>((uint8_t)value);
+                    Helpers::DeviceStorage::SaveIoDevice(deviceId, stored);
+                }
+            }
+        }
+    } else if (strcmp(action, "setManufacturer") == 0) {
+        if (strlen(deviceId) > 0 && value >= 0 && value <= 0x0C) {
+            {
+                std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
+                auto it = s_manager->mIoDevices.find(deviceId);
+                if (it != s_manager->mIoDevices.end()) {
+                    it->second.info.manufacturer = static_cast<iohome::Manufacturer>((uint8_t)value);
+                    ok = true;
+                }
+            }
+            if (ok) {
+                Helpers::StoredIoDevice stored;
+                if (Helpers::DeviceStorage::LoadIoDevice(deviceId, stored) == ESP_OK) {
+                    stored.device.info.manufacturer = static_cast<iohome::Manufacturer>((uint8_t)value);
+                    Helpers::DeviceStorage::SaveIoDevice(deviceId, stored);
+                }
+            }
+        }
     } else {
         cJSON_Delete(json);
         send_result(req, false, "Unknown action");

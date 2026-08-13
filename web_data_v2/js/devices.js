@@ -491,6 +491,64 @@ resetClosedBtn.onclick = function () {
         .catch(function (e) { showToast(e.message, "error"); });
 };
 body.appendChild(devRow("Reset position", "Force estimated position to a known state.", [resetOpenBtn, resetClosedBtn]));
+// Device type selector
+var DEVICE_TYPES = [
+    [2,"Roller shutter"],[1,"Venetian blind"],[10,"Blind"],[13,"Dual shutter"],
+    [3,"Awning"],[16,"Horizontal awning"],[24,"Swinging shutter"],
+    [4,"Window opener"],[5,"Garage opener"],[7,"Gate opener"],[8,"Rolling door opener"],
+    [6,"Light"],[15,"On/off switch"],[9,"Lock"],[0,"Unknown"]
+];
+var typeSelect = document.createElement("select");
+typeSelect.className = "s-input";
+typeSelect.style.cssText = "font-size:12px;padding:4px 8px;";
+DEVICE_TYPES.forEach(function(t) {
+    var o = document.createElement("option");
+    o.value = t[0];
+    o.textContent = t[1];
+    if (t[0] === device.type) o.selected = true;
+    typeSelect.appendChild(o);
+});
+var typeSaveBtn = devBtn("Save", "primary");
+typeSaveBtn.onclick = function () {
+    var v = parseInt(typeSelect.value, 10);
+    typeSaveBtn.disabled = true;
+    window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "setDeviceType", value: v })
+        .then(function (r) {
+            typeSaveBtn.disabled = false;
+            if (r.success) { device.type = v; showToast("Device type saved.", "success"); fetchAndDisplayDevices(app); closeDeviceEditModal(); }
+            else showToast(r.message || "Failed.", "error");
+        })
+        .catch(function (e) { typeSaveBtn.disabled = false; showToast(e.message, "error"); });
+};
+body.appendChild(devRow("Device type", "Controls which buttons appear in the UI.", [typeSelect, typeSaveBtn]));
+// Brand / manufacturer selector
+var MANUFACTURERS = [
+    [2,"Somfy"],[1,"Velux"],[3,"Honeywell"],[4,"Hörmann"],[5,"Assa Abloy"],
+    [6,"Niko"],[7,"Window Master"],[8,"Renson"],[11,"Overkiz"],[12,"Atlantic Group"],[0,"Unknown"]
+];
+var mfrSelect = document.createElement("select");
+mfrSelect.className = "s-input";
+mfrSelect.style.cssText = "font-size:12px;padding:4px 8px;";
+MANUFACTURERS.forEach(function(m) {
+    var o = document.createElement("option");
+    o.value = m[0];
+    o.textContent = m[1];
+    if (m[0] === device.manufacturer_id) o.selected = true;
+    mfrSelect.appendChild(o);
+});
+var mfrSaveBtn = devBtn("Save", "primary");
+mfrSaveBtn.onclick = function () {
+    var v = parseInt(mfrSelect.value, 10);
+    mfrSaveBtn.disabled = true;
+    window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "setManufacturer", value: v })
+        .then(function (r) {
+            mfrSaveBtn.disabled = false;
+            if (r.success) { device.manufacturer_id = v; showToast("Brand saved.", "success"); }
+            else showToast(r.message || "Failed.", "error");
+        })
+        .catch(function (e) { mfrSaveBtn.disabled = false; showToast(e.message, "error"); });
+};
+body.appendChild(devRow("Brand", "Manufacturer of the device.", [mfrSelect, mfrSaveBtn]));
 var winkBtn = devBtn("Put in pairing mode", "");
 winkBtn.onclick = function () {
     window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "wink1w" })
