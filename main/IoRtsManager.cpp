@@ -421,12 +421,19 @@ namespace IoRts
             mIoDevicesMutex.unlock();
             if (!dev.is_deleted)
             {
-                // Only register active devices with the radio layer
-                mIoHome->RestoreDevice(deviceID, dev);
+                bool is1w = (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+                if (!is1w)
+                {
+                    // Only register 2W devices with the radio layer.
+                    // 1W devices are simplex — registering them with IoHomeControl
+                    // would trigger 2W status polls that never get a response.
+                    mIoHome->RestoreDevice(deviceID, dev);
+                }
                 for (const std::string &remoteID : storedDevice.linked_remotes)
                     mIoHome->LinkRemoteToDevice(remoteID, deviceID);
-                ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s), transit=%ums",
-                         deviceID.c_str(), dev.info.name, storedDevice.linked_remotes.size(), dev.transit_time_ms);
+                ESP_LOGI(TAG, "Restored %s device %s (%s) with %u remote(s), transit=%ums",
+                         is1w ? "1W" : "2W", deviceID.c_str(), dev.info.name,
+                         storedDevice.linked_remotes.size(), dev.transit_time_ms);
             }
             else
             {

@@ -2291,15 +2291,30 @@ static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
 
         dev.info.protocol_mode = iohome::ProtocolMode::PROTO_1W;
 
-        // sequence
+        // sequence — stored as a 4-char hex string ("00EF") in iohomecontrol backups
         cJSON *seqItem = cJSON_GetObjectItem(entry, "sequence");
-        dev.info.sequence_1w = cJSON_IsNumber(seqItem) ? (uint16_t)(int)seqItem->valuedouble : 1;
+        if (cJSON_IsString(seqItem) && strlen(seqItem->valuestring) == 4) {
+            char hi[3] = {seqItem->valuestring[0], seqItem->valuestring[1], 0};
+            char lo[3] = {seqItem->valuestring[2], seqItem->valuestring[3], 0};
+            dev.info.sequence_1w = (uint16_t)((strtoul(hi, nullptr, 16) << 8) | strtoul(lo, nullptr, 16));
+        } else if (cJSON_IsNumber(seqItem)) {
+            dev.info.sequence_1w = (uint16_t)(int)seqItem->valuedouble;
+        } else {
+            dev.info.sequence_1w = 1;
+        }
 
-        // device type
+        // device type — stored as a JSON array [typeCode] in iohomecontrol backups
         cJSON *typeItem = cJSON_GetObjectItem(entry, "type");
-        dev.info.device_type = cJSON_IsNumber(typeItem)
-            ? static_cast<iohome::DeviceType>((uint8_t)typeItem->valuedouble)
-            : iohome::DeviceType::UNKNOWN;
+        if (cJSON_IsArray(typeItem) && cJSON_GetArraySize(typeItem) > 0) {
+            cJSON *first = cJSON_GetArrayItem(typeItem, 0);
+            dev.info.device_type = cJSON_IsNumber(first)
+                ? static_cast<iohome::DeviceType>((uint8_t)first->valuedouble)
+                : iohome::DeviceType::UNKNOWN;
+        } else if (cJSON_IsNumber(typeItem)) {
+            dev.info.device_type = static_cast<iohome::DeviceType>((uint8_t)typeItem->valuedouble);
+        } else {
+            dev.info.device_type = iohome::DeviceType::UNKNOWN;
+        }
 
         // manufacturer
         cJSON *mfItem = cJSON_GetObjectItem(entry, "manufacturer_id");
@@ -2321,11 +2336,14 @@ static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
 
         // is_low_power: default true for 1W motors (most are battery/solar)
         dev.info.is_low_power = true;
+        // Copy transit_time into the IoDevice itself (LoadIoDevicesFromStorage does this at boot)
+        dev.transit_time_ms = sd.transit_time_ms;
 
         std::string deviceID(nodeIdStr);
         allDevices[deviceID] = sd;
 
-        // Register in live device map
+        // Register in live device map only — do NOT call mIoHome->RestoreDevice for
+        // 1W devices: the 2W radio layer would try to poll them and cause a transmit storm.
         {
             std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
             auto it = s_manager->mIoDevices.find(deviceID);
