@@ -68,6 +68,7 @@ namespace IoRts
         /// @param transit_time_ms Transit time in milliseconds (0 = uncalibrated)
         /// @return true on success
         bool SetTransitTime(const std::string &deviceID, uint32_t transit_time_ms);
+        bool SetLocalName(const std::string &deviceID, const std::string &name);
 
         /// @brief Set quiet mode for a device (persists to storage)
         /// @param deviceID Device ID

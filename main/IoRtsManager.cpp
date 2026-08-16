@@ -414,6 +414,8 @@ namespace IoRts
             iohome::IoDevice dev = storedDevice.device;
             dev.transit_time_ms = storedDevice.transit_time_ms;
             dev.quiet = storedDevice.quiet;
+            strncpy(dev.local_name, storedDevice.local_name.c_str(), sizeof(dev.local_name) - 1);
+            dev.local_name[sizeof(dev.local_name) - 1] = '\0';
 
             // Add to our local map regardless of active/inactive state
             mIoDevicesMutex.lock();
@@ -548,6 +550,34 @@ namespace IoRts
         esp_err_t err = Helpers::DeviceStorage::SaveIoDevice(deviceID, stored);
         if (err == ESP_OK)
             ESP_LOGI(TAG, "Quiet mode for %s set to %s", deviceID.c_str(), quiet ? "on" : "off");
+        return err == ESP_OK;
+    }
+
+    bool IoRtsManager::SetLocalName(const std::string &deviceID, const std::string &name)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool found = it != mIoDevices.end();
+        if (found) {
+            strncpy(it->second.local_name, name.c_str(), sizeof(it->second.local_name) - 1);
+            it->second.local_name[sizeof(it->second.local_name) - 1] = '\0';
+        }
+        mIoDevicesMutex.unlock();
+
+        if (!found)
+            return false;
+
+        Helpers::StoredIoDevice stored;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) != ESP_OK)
+            return false;
+        stored.local_name = name;
+        esp_err_t err = Helpers::DeviceStorage::SaveIoDevice(deviceID, stored);
+        if (err == ESP_OK)
+        {
+            ESP_LOGI(TAG, "Local name for %s set to '%s'", deviceID.c_str(), name.c_str());
+            if (sMqttHelper != nullptr)
+                sMqttHelper->SendDiscovery();
+        }
         return err == ESP_OK;
     }
 

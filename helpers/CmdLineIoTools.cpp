@@ -262,7 +262,7 @@ static int do_iodeleteinactive_cmd(int argc, char **argv)
         std::lock_guard<std::mutex> guard(sIoRtsManager->mIoDevicesMutex);
         for (const auto &[id, dev] : sIoRtsManager->mIoDevices)
             if (dev.is_deleted)
-                inactive.push_back({id, std::string(dev.info.name)});
+                inactive.push_back({id, iohome::device_display_name(dev)});
     }
 
     if (inactive.empty())
@@ -869,7 +869,7 @@ static int do_iolistdevices_cmd(int argc, char **argv)
         int32_t last_update = (esp_timer_get_time() - it->second.last_status_timestamp) / 1000000;        // seconds ago
         int32_t next_update = (it->second.next_status_update_timestamp - esp_timer_get_time()) / 1000000; // seconds in the future
         ESP_LOGI(TAG, "Device ID=%s, Name=%s, type=0x%02X, subtype=0x%02X, Manufacturer=%s, Deleted=%s, Inverted=%s, updated %ds ago, next update in %d seconds",
-                 it->first.c_str(), it->second.info.name,
+                 it->first.c_str(), iohome::device_display_name(it->second).c_str(),
                  it->second.info.device_type, it->second.info.device_subtype, IoDeviceManufacturer(it->second.info.manufacturer).c_str(),
                  it->second.is_deleted ? "Yes" : "No", it->second.info.is_openclose_inverted ? "Yes" : "No",
                  last_update, next_update);

@@ -336,6 +336,50 @@ app.i18nText("popup.quiet_desc", "Slower, quieter motor operation."),
 quietToggle
 ));
 }
+if (device.protocol !== "1w" && device.somfy_name !== undefined) {
+var somfyNameInput = document.createElement("input");
+somfyNameInput.type = "text";
+somfyNameInput.className = "s-input";
+somfyNameInput.value = device.somfy_name || "";
+somfyNameInput.maxLength = 15;
+somfyNameInput.style.flex = "1";
+var somfyWriteBtn = devBtn(app.i18nText("button.write_to_device", "Write to device"), "");
+somfyWriteBtn.style.flexShrink = "0";
+var somfyStatus = document.createElement("span");
+somfyStatus.style.cssText = "font-size:11px;min-height:16px;display:block;margin-top:2px;";
+somfyWriteBtn.onclick = function () {
+var val = somfyNameInput.value.trim();
+if (!val) { somfyStatus.style.color = "var(--error,red)"; somfyStatus.textContent = app.i18nText("popup.rename_empty", "Name cannot be empty."); return; }
+somfyWriteBtn.disabled = true;
+somfyStatus.style.color = "var(--text3)";
+somfyStatus.textContent = app.i18nText("popup.writing", "Writing…");
+window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "setSomfyName", value: val })
+.then(function (r) {
+somfyWriteBtn.disabled = false;
+if (!r.success) {
+  somfyStatus.style.color = "var(--error,red)";
+  somfyStatus.textContent = r.message || app.i18nText("popup.rename_failed", "Write failed.");
+} else {
+  device.somfy_name = val;
+  somfyStatus.style.color = "var(--success,green)";
+  somfyStatus.textContent = app.i18nText("popup.written", "Written to device.");
+}
+})
+.catch(function (e) { somfyWriteBtn.disabled = false; somfyStatus.style.color = "var(--error,red)"; somfyStatus.textContent = e.message; });
+};
+var somfyRow = document.createElement("div");
+somfyRow.style.cssText = "display:flex;gap:8px;align-items:center;";
+somfyRow.appendChild(somfyNameInput);
+somfyRow.appendChild(somfyWriteBtn);
+var somfyWrap = document.createElement("div");
+somfyWrap.appendChild(somfyRow);
+somfyWrap.appendChild(somfyStatus);
+body.appendChild(devRow(
+app.i18nText("label.somfy_device_name", "Somfy device name"),
+app.i18nText("popup.somfy_name_desc", "Name stored on the device (max 15 chars). Written via radio."),
+somfyWrap
+));
+}
 if (hasPos) {
 var transitSec = device.transit_time_ms > 0 ? Math.round(device.transit_time_ms / 1000) : 0;
 var transitSubText = transitSec > 0

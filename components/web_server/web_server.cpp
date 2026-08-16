@@ -441,7 +441,10 @@ static esp_err_t api_devices_get(httpd_req_t *req)
     for (const auto &[id, dev] : s_manager->mIoDevices) {
         cJSON *obj = cJSON_CreateObject();
         cJSON_AddStringToObject(obj, "id", id.c_str());
-        cJSON_AddStringToObject(obj, "name", dev.info.name);
+        cJSON_AddStringToObject(obj, "name", iohome::device_display_name(dev).c_str());
+        bool is1w = (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+        if (!is1w)
+            cJSON_AddStringToObject(obj, "somfy_name", dev.info.name);
         cJSON_AddBoolToObject(obj, "inactive", dev.is_deleted);
 
         int pos  = (dev.position == iohome::UNKNOWN_POSITION) ? -1 : (int)dev.position;
@@ -463,7 +466,6 @@ static esp_err_t api_devices_get(httpd_req_t *req)
             iohome::deviceTypeSupportsTilt(dev.info.device_type));
 
         cJSON_AddNumberToObject(obj, "transit_time_ms", dev.transit_time_ms);
-        bool is1w = (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
         cJSON_AddStringToObject(obj, "protocol", is1w ? "1w" : "2w");
         cJSON_AddBoolToObject(obj, "position_estimated", is1w);
 
@@ -614,9 +616,28 @@ static esp_err_t api_action_post(httpd_req_t *req)
         cJSON *jName = cJSON_GetObjectItem(json, "value");
         const char *newName = cJSON_IsString(jName) ? jName->valuestring : "";
         if (strlen(newName) > 0) {
-            ok = s_manager->mIoHome->SetDeviceName(deviceId, newName);
+            ok = s_manager->SetLocalName(deviceId, newName);
         } else {
             send_result(req, false, "Empty name");
+            cJSON_Delete(json);
+            return ESP_OK;
+        }
+    } else if (strcmp(action, "setSomfyName") == 0) {
+        cJSON *jName = cJSON_GetObjectItem(json, "value");
+        const char *newName = cJSON_IsString(jName) ? jName->valuestring : "";
+        if (strlen(newName) == 0) {
+            send_result(req, false, "Empty name");
+            cJSON_Delete(json);
+            return ESP_OK;
+        }
+        if (strlen(newName) > 15) {
+            send_result(req, false, "Name too long (max 15 characters)");
+            cJSON_Delete(json);
+            return ESP_OK;
+        }
+        ok = s_manager->mIoHome->SetDeviceName(deviceId, newName);
+        if (!ok) {
+            send_result(req, false, "Failed to write name to device — communication error");
             cJSON_Delete(json);
             return ESP_OK;
         }

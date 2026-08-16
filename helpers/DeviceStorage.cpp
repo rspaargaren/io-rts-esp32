@@ -65,6 +65,8 @@ namespace Helpers
         cJSON_AddBoolToObject(obj, "is_low_power",        dev.info.is_low_power);
         cJSON_AddNumberToObject(obj, "transit_ms", sd.transit_time_ms);
         cJSON_AddBoolToObject(obj, "quiet", sd.quiet);
+        if (!sd.local_name.empty())
+            cJSON_AddStringToObject(obj, "local_name", sd.local_name.c_str());
 
         if (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W)
         {
@@ -148,6 +150,11 @@ namespace Helpers
 
         cJSON *quietItem = cJSON_GetObjectItem(obj, "quiet");
         sd.quiet = cJSON_IsBool(quietItem) ? cJSON_IsTrue(quietItem) : false;
+
+        cJSON *localNameItem = cJSON_GetObjectItem(obj, "local_name");
+        sd.local_name = (cJSON_IsString(localNameItem) && localNameItem->valuestring[0]) ? localNameItem->valuestring : "";
+        strncpy(sd.device.local_name, sd.local_name.c_str(), sizeof(sd.device.local_name) - 1);
+        sd.device.local_name[sizeof(sd.device.local_name) - 1] = '\0';
 
         cJSON *protoItem = cJSON_GetObjectItem(obj, "protocol");
         if (cJSON_IsString(protoItem) && strcmp(protoItem->valuestring, "1w") == 0)

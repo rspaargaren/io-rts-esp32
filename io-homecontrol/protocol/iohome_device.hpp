@@ -43,6 +43,7 @@ namespace iohome
         // Fields persisted via StoredIoDevice, copied into IoDevice at load time
         uint32_t transit_time_ms = 0;         // Time to travel full range in ms (0 = uncalibrated)
         bool quiet = false;                   // Slower, quieter motor operation
+        char local_name[64];                  // User-defined display name; overrides info.name if non-empty
         // Transient movement-tracking fields (not persisted, zero at boot)
         int64_t move_start_us  = 0;           // esp_timer_get_time() when the last position command was sent (0 = no active movement)
         float   move_start_pos = 0.0f;        // Position at the time the command was sent
@@ -71,5 +72,11 @@ namespace iohome
     /// @param type device type value from enum
     /// @return device type
     std::string IoDeviceType(DeviceType type);
+
+    /// @brief Returns the effective display name: local_name if set, otherwise info.name.
+    inline std::string device_display_name(const IoDevice &dev)
+    {
+        return (dev.local_name[0] != '\0') ? std::string(dev.local_name) : std::string(dev.info.name);
+    }
     
 } // namespace iohome
