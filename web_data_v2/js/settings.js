@@ -1095,6 +1095,7 @@
             app.elements.syslogFacilityInput.value     = cfg.facility  != null ? cfg.facility : "1";
             app.elements.syslogMinLevelInput.value     = cfg.min_level != null ? String(cfg.min_level) : "7";
             app.elements.syslogIdInput.value           = cfg.id        || "";
+            app.elements.syslogFormatInput.value       = cfg.format    || "5424";
             if (cfg.enabled && cfg.server) startPingPolling(app);
             else { stopPingPolling(); updateSyslogStatusEl("disabled"); }
         } catch (error) {
@@ -1109,7 +1110,8 @@
                 server:    app.elements.syslogServerInput.value.trim(),
                 port:      parseInt(app.elements.syslogPortInput.value, 10) || 514,
                 facility:  parseInt(app.elements.syslogFacilityInput.value, 10),
-                min_level: parseInt(app.elements.syslogMinLevelInput.value, 10)
+                min_level: parseInt(app.elements.syslogMinLevelInput.value, 10),
+                format:    app.elements.syslogFormatInput.value || "5424"
             };
             const id = app.elements.syslogIdInput.value.trim();
             if (id) payload.id = id;
@@ -1124,7 +1126,8 @@
     }
 
     function init(app) {
-        app.elements.syslogIdInput = document.getElementById("syslog-id");
+        app.elements.syslogIdInput     = document.getElementById("syslog-id");
+        app.elements.syslogFormatInput = document.getElementById("syslog-format");
         app.loadSyslogConfig   = function () { return loadSyslogConfig(app); };
         app.updateSyslogConfig = function () { return updateSyslogConfig(app); };
 

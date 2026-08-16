@@ -25,6 +25,10 @@ bool syslog_is_active(void);
 /// @brief Set the syslog identifier used as the APP-NAME in messages.
 void syslog_set_id(const char *id);
 
+/// @brief Set the syslog wire format.
+/// @param rfc5424 true = RFC 5424 (default), false = RFC 3164 (Graylog-compatible).
+void syslog_set_format(bool rfc5424);
+
 #ifdef __cplusplus
 }
 #endif

@@ -24,6 +24,7 @@ static char              s_id[16]    = "io-rts-esp32";
 static bool     s_enabled   = false;
 static uint8_t  s_facility  = 1;
 static uint8_t  s_min_level = 7;
+static bool     s_rfc5424   = true;
 
 static uint8_t severity_from_esp_char(char c)
 {
@@ -46,6 +47,7 @@ void syslog_apply_config(void)
 {
     s_facility  = Config::SyslogConfig::GetFacility();
     s_min_level = Config::SyslogConfig::GetMinLevel();
+    s_rfc5424   = Config::SyslogConfig::GetFormatRfc5424();
 
     bool enabled = Config::SyslogConfig::isEnabled();
     if (!enabled) {
@@ -122,6 +124,11 @@ void syslog_set_id(const char *id)
         snprintf(s_id, sizeof(s_id), "%s", id);
 }
 
+void syslog_set_format(bool rfc5424)
+{
+    s_rfc5424 = rfc5424;
+}
+
 void syslog_send(const char *line)
 {
     int fd = s_sock;  // local copy to avoid race with syslog_apply_config
@@ -132,12 +139,21 @@ void syslog_send(const char *line)
 
     uint8_t pri = (s_facility * 8) + severity;
 
-    // RFC 5424 format. Timestamp omitted (nil) — let the syslog server stamp with reception time.
-    // This avoids wrong timestamps when NTP hasn't synced yet.
-    // UTF-8 BOM prefix on the MSG field as required by RFC 5424 for UTF-8 encoded messages.
     char buf[256];
-    int len = snprintf(buf, sizeof(buf), "<%u>1 - %s %s - - - \xEF\xBB\xBF%s",
+    int len;
+    if (s_rfc5424)
+    {
+        // RFC 5424: timestamp omitted (nil) — server stamps on receipt.
+        // UTF-8 BOM prefix required by RFC 5424 for UTF-8 MSG.
+        len = snprintf(buf, sizeof(buf), "<%u>1 - %s %s - - - \xEF\xBB\xBF%s",
                        (unsigned)pri, s_hostname, s_id, line);
+    }
+    else
+    {
+        // RFC 3164: no timestamp — Graylog correctly extracts HOSTNAME as source.
+        len = snprintf(buf, sizeof(buf), "<%u>%s %s: %s",
+                       (unsigned)pri, s_hostname, s_id, line);
+    }
     if (len <= 0) return;
     if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
 

@@ -368,6 +368,13 @@
                   <label style="font-size:11px;color:var(--text3);" data-i18n="label.device-identifier">Device identifier (shown in log)</label>
                   <input type="text" id="syslog-id" class="s-input" placeholder="auto-generated" maxlength="15">
                 </div>
+                <div style="display:flex;flex-direction:column;gap:4px;">
+                  <label style="font-size:11px;color:var(--text3);">Format</label>
+                  <select id="syslog-format" class="s-select">
+                    <option value="5424">RFC 5424</option>
+                    <option value="3164">RFC 3164 (Graylog)</option>
+                  </select>
+                </div>
                 <button class="s-btn primary" id="syslog-update" data-i18n="button.save-syslog">Save Syslog</button>
               </div>
             </div>

@@ -1502,6 +1502,7 @@ static esp_err_t api_syslog_get(httpd_req_t *req)
     cJSON_AddNumberToObject(obj, "facility",  Config::SyslogConfig::GetFacility());
     cJSON_AddNumberToObject(obj, "min_level", Config::SyslogConfig::GetMinLevel());
     cJSON_AddStringToObject(obj, "id",        s_syslog_id);
+    cJSON_AddStringToObject(obj, "format",    Config::SyslogConfig::GetFormatRfc5424() ? "5424" : "3164");
     send_json(req, obj);
     return ESP_OK;
 }
@@ -1527,12 +1528,18 @@ static esp_err_t api_syslog_post(httpd_req_t *req)
     cJSON *jFacility = cJSON_GetObjectItem(json, "facility");
     cJSON *jMinLevel = cJSON_GetObjectItem(json, "min_level");
     cJSON *jId       = cJSON_GetObjectItem(json, "id");
+    cJSON *jFormat   = cJSON_GetObjectItem(json, "format");
 
-    if (cJSON_IsBool(jEnabled))   Config::SyslogConfig::SetEnabled(cJSON_IsTrue(jEnabled));
-    if (cJSON_IsString(jServer))  Config::SyslogConfig::SetServer(trim_str(jServer->valuestring));
-    if (cJSON_IsNumber(jPort))    Config::SyslogConfig::SetPort((uint16_t)jPort->valuedouble);
+    if (cJSON_IsBool(jEnabled))    Config::SyslogConfig::SetEnabled(cJSON_IsTrue(jEnabled));
+    if (cJSON_IsString(jServer))   Config::SyslogConfig::SetServer(trim_str(jServer->valuestring));
+    if (cJSON_IsNumber(jPort))     Config::SyslogConfig::SetPort((uint16_t)jPort->valuedouble);
     if (cJSON_IsNumber(jFacility)) Config::SyslogConfig::SetFacility((uint8_t)jFacility->valuedouble);
     if (cJSON_IsNumber(jMinLevel)) Config::SyslogConfig::SetMinLevel((uint8_t)jMinLevel->valuedouble);
+    if (cJSON_IsString(jFormat)) {
+        bool rfc5424 = strcmp(jFormat->valuestring, "3164") != 0;
+        Config::SyslogConfig::SetFormatRfc5424(rfc5424);
+        syslog_set_format(rfc5424);
+    }
     if (cJSON_IsString(jId) && jId->valuestring[0]) {
         snprintf(s_syslog_id, sizeof(s_syslog_id), "%s", jId->valuestring);
         nvs_handle_t h;
