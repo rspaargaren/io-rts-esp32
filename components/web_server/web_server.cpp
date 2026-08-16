@@ -407,11 +407,10 @@ static esp_err_t static_file_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, content_type_for(filepath));
     if (serve_gz) httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-    // Cache versioned assets; revalidate HTML/JSON so updated content is always fetched
+    // JS/CSS change on every web upload — always revalidate. Images/icons are stable.
     {
         const char *ext = strrchr(filepath, '.');
-        if (ext && (strcmp(ext, ".css") == 0 || strcmp(ext, ".js") == 0 ||
-                    strcmp(ext, ".png") == 0 || strcmp(ext, ".svg") == 0 ||
+        if (ext && (strcmp(ext, ".png") == 0 || strcmp(ext, ".svg") == 0 ||
                     strcmp(ext, ".ico") == 0)) {
             httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000, immutable");
         } else {
@@ -442,7 +441,10 @@ static esp_err_t api_devices_get(httpd_req_t *req)
     for (const auto &[id, dev] : s_manager->mIoDevices) {
         cJSON *obj = cJSON_CreateObject();
         cJSON_AddStringToObject(obj, "id", id.c_str());
-        cJSON_AddStringToObject(obj, "name", dev.info.name);
+        cJSON_AddStringToObject(obj, "name", iohome::device_display_name(dev).c_str());
+        bool is1w = (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+        if (!is1w)
+            cJSON_AddStringToObject(obj, "somfy_name", dev.info.name);
         cJSON_AddBoolToObject(obj, "inactive", dev.is_deleted);
 
         int pos  = (dev.position == iohome::UNKNOWN_POSITION) ? -1 : (int)dev.position;
@@ -455,6 +457,7 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddNumberToObject(obj, "subtype", dev.info.device_subtype);
         cJSON_AddStringToObject(obj, "manufacturer",
             iohome::IoDeviceManufacturer(dev.info.manufacturer).c_str());
+        cJSON_AddNumberToObject(obj, "manufacturer_id", (uint8_t)dev.info.manufacturer);
         cJSON_AddBoolToObject(obj, "is_low_power",  dev.info.is_low_power);
         cJSON_AddBoolToObject(obj, "is_stopped",    dev.is_stopped);
         cJSON_AddBoolToObject(obj, "is_inverted",   dev.info.is_openclose_inverted);
@@ -463,6 +466,8 @@ static esp_err_t api_devices_get(httpd_req_t *req)
             iohome::deviceTypeSupportsTilt(dev.info.device_type));
 
         cJSON_AddNumberToObject(obj, "transit_time_ms", dev.transit_time_ms);
+        cJSON_AddStringToObject(obj, "protocol", is1w ? "1w" : "2w");
+        cJSON_AddBoolToObject(obj, "position_estimated", is1w);
 
         cJSON_AddItemToArray(arr, obj);
     }
@@ -532,6 +537,7 @@ static esp_err_t api_action_post(httpd_req_t *req)
     cJSON *jAction   = cJSON_GetObjectItem(json, "action");
     cJSON *jValue    = cJSON_GetObjectItem(json, "value");
     cJSON *jRemoteId = cJSON_GetObjectItem(json, "remoteId");
+    cJSON *jName     = cJSON_GetObjectItem(json, "name");
 
     const char *action   = cJSON_IsString(jAction)   ? jAction->valuestring   : "";
     const char *deviceId = cJSON_IsString(jDeviceId) ? jDeviceId->valuestring : "";
@@ -555,8 +561,9 @@ static esp_err_t api_action_post(httpd_req_t *req)
         }
         float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
         uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
+        bool is_2w = (it != s_manager->mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_2W);
         s_manager->mIoDevicesMutex.unlock();
-        s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
+        if (is_2w) s_manager->ScheduleConfirmationPoll(deviceId, tt, dist);
     };
 
     if (strcmp(action, "open") == 0) {
@@ -565,7 +572,7 @@ static esp_err_t api_action_post(httpd_req_t *req)
         bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
         float target_pos = (qit != s_manager->mIoDevices.end() && qit->second.info.is_openclose_inverted) ? 100.0f : 0.0f;
         s_manager->mIoDevicesMutex.unlock();
-        ok = s_manager->mIoHome->OpenDevice(deviceId, quiet);
+        ok = s_manager->OpenDevice(deviceId, quiet);
         if (ok) arm_move(target_pos);
     } else if (strcmp(action, "close") == 0) {
         s_manager->mIoDevicesMutex.lock();
@@ -573,23 +580,24 @@ static esp_err_t api_action_post(httpd_req_t *req)
         bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
         float target_pos = (qit != s_manager->mIoDevices.end() && qit->second.info.is_openclose_inverted) ? 0.0f : 100.0f;
         s_manager->mIoDevicesMutex.unlock();
-        ok = s_manager->mIoHome->CloseDevice(deviceId, quiet);
+        ok = s_manager->CloseDevice(deviceId, quiet);
         if (ok) arm_move(target_pos);
     } else if (strcmp(action, "stop") == 0) {
-        ok = s_manager->mIoHome->StopDevice(deviceId);
+        ok = s_manager->StopDevice(deviceId);
         if (ok) {
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
+            bool is_2w = (it != s_manager->mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_2W);
             if (it != s_manager->mIoDevices.end()) it->second.move_start_us = 0;
             s_manager->mIoDevicesMutex.unlock();
-            s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f);
+            if (is_2w) s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f);
         }
     } else if (strcmp(action, "position") == 0 && value >= 0 && value <= 100) {
         s_manager->mIoDevicesMutex.lock();
         auto qit = s_manager->mIoDevices.find(deviceId);
         bool quiet = (qit != s_manager->mIoDevices.end()) ? qit->second.quiet : false;
         s_manager->mIoDevicesMutex.unlock();
-        ok = s_manager->mIoHome->SetDevicePosition(deviceId, (uint8_t)value, quiet);
+        ok = s_manager->SetDevicePosition(deviceId, (uint8_t)value, quiet);
         if (ok) arm_move((float)value);
     } else if (strcmp(action, "tilt") == 0 && value >= 0 && value <= 100) {
         ok = s_manager->mIoHome->SetDeviceTilt(deviceId, (uint8_t)value);
@@ -608,9 +616,28 @@ static esp_err_t api_action_post(httpd_req_t *req)
         cJSON *jName = cJSON_GetObjectItem(json, "value");
         const char *newName = cJSON_IsString(jName) ? jName->valuestring : "";
         if (strlen(newName) > 0) {
-            ok = s_manager->mIoHome->SetDeviceName(deviceId, newName);
+            ok = s_manager->SetLocalName(deviceId, newName);
         } else {
             send_result(req, false, "Empty name");
+            cJSON_Delete(json);
+            return ESP_OK;
+        }
+    } else if (strcmp(action, "setSomfyName") == 0) {
+        cJSON *jName = cJSON_GetObjectItem(json, "value");
+        const char *newName = cJSON_IsString(jName) ? jName->valuestring : "";
+        if (strlen(newName) == 0) {
+            send_result(req, false, "Empty name");
+            cJSON_Delete(json);
+            return ESP_OK;
+        }
+        if (strlen(newName) > 15) {
+            send_result(req, false, "Name too long (max 15 characters)");
+            cJSON_Delete(json);
+            return ESP_OK;
+        }
+        ok = s_manager->mIoHome->SetDeviceName(deviceId, newName);
+        if (!ok) {
+            send_result(req, false, "Failed to write name to device — communication error");
             cJSON_Delete(json);
             return ESP_OK;
         }
@@ -639,6 +666,55 @@ static esp_err_t api_action_post(httpd_req_t *req)
                 return ESP_OK;
             }
         }
+    } else if (strcmp(action, "sendpair1w") == 0) {
+        if (strlen(deviceId) > 0)
+            ok = s_manager->ReSendPair1W(deviceId);
+    } else if (strcmp(action, "wink1w") == 0) {
+        if (strlen(deviceId) > 0)
+            ok = s_manager->Wink1WDevice(deviceId);
+    } else if (strcmp(action, "sendremove1w") == 0) {
+        if (strlen(deviceId) > 0)
+            ok = s_manager->SendRemove1W(deviceId);
+    } else if (strcmp(action, "unpair1w") == 0) {
+        if (strlen(deviceId) > 0)
+            ok = s_manager->Unpair1WDevice(deviceId);
+    } else if (strcmp(action, "pair1w") == 0) {
+        const char *name = cJSON_IsString(jName) ? jName->valuestring : "";
+        if (strlen(name) > 0) {
+            cJSON *jType = cJSON_GetObjectItem(json, "deviceType");
+            cJSON *jMfr  = cJSON_GetObjectItem(json, "manufacturer");
+            auto type = cJSON_IsNumber(jType)
+                ? static_cast<iohome::DeviceType>((int)jType->valuedouble)
+                : iohome::DeviceType::UNKNOWN;
+            auto mfr = cJSON_IsNumber(jMfr)
+                ? static_cast<iohome::Manufacturer>((int)jMfr->valuedouble)
+                : iohome::Manufacturer::SOMFY;
+            std::string newId = s_manager->Pair1WDevice(name, type, mfr);
+            if (!newId.empty()) {
+                cJSON_Delete(json);
+                cJSON *resp = cJSON_CreateObject();
+                cJSON_AddBoolToObject(resp, "success", true);
+                cJSON_AddStringToObject(resp, "deviceId", newId.c_str());
+                char *respStr = cJSON_PrintUnformatted(resp);
+                cJSON_Delete(resp);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_sendstr(req, respStr);
+                free(respStr);
+                return ESP_OK;
+            }
+        }
+    } else if (strcmp(action, "resetPosition1w") == 0) {
+        if (strlen(deviceId) > 0 && (value == 0 || value == 100)) {
+            std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
+            auto it = s_manager->mIoDevices.find(deviceId);
+            if (it != s_manager->mIoDevices.end() &&
+                it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_1W) {
+                it->second.position      = (float)value;
+                it->second.move_start_us = 0;
+                it->second.is_stopped    = true;
+                ok = true;
+            }
+        }
     } else if (strcmp(action, "setTransitTime") == 0) {
         if (strlen(deviceId) > 0 && value >= 0 && value <= 300) {
             ok = s_manager->SetTransitTime(deviceId, (uint32_t)(value * 1000));
@@ -655,6 +731,42 @@ static esp_err_t api_action_post(httpd_req_t *req)
     } else if (strcmp(action, "cancelCalibration") == 0) {
         s_cal_cancel = true;
         ok = true;
+    } else if (strcmp(action, "setDeviceType") == 0) {
+        if (strlen(deviceId) > 0 && value >= 0 && value <= 0x18) {
+            {
+                std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
+                auto it = s_manager->mIoDevices.find(deviceId);
+                if (it != s_manager->mIoDevices.end()) {
+                    it->second.info.device_type = static_cast<iohome::DeviceType>((uint8_t)value);
+                    ok = true;
+                }
+            }
+            if (ok) {
+                Helpers::StoredIoDevice stored;
+                if (Helpers::DeviceStorage::LoadIoDevice(deviceId, stored) == ESP_OK) {
+                    stored.device.info.device_type = static_cast<iohome::DeviceType>((uint8_t)value);
+                    Helpers::DeviceStorage::SaveIoDevice(deviceId, stored);
+                }
+            }
+        }
+    } else if (strcmp(action, "setManufacturer") == 0) {
+        if (strlen(deviceId) > 0 && value >= 0 && value <= 0x0C) {
+            {
+                std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
+                auto it = s_manager->mIoDevices.find(deviceId);
+                if (it != s_manager->mIoDevices.end()) {
+                    it->second.info.manufacturer = static_cast<iohome::Manufacturer>((uint8_t)value);
+                    ok = true;
+                }
+            }
+            if (ok) {
+                Helpers::StoredIoDevice stored;
+                if (Helpers::DeviceStorage::LoadIoDevice(deviceId, stored) == ESP_OK) {
+                    stored.device.info.manufacturer = static_cast<iohome::Manufacturer>((uint8_t)value);
+                    Helpers::DeviceStorage::SaveIoDevice(deviceId, stored);
+                }
+            }
+        }
     } else {
         cJSON_Delete(json);
         send_result(req, false, "Unknown action");
@@ -1411,6 +1523,7 @@ static esp_err_t api_syslog_get(httpd_req_t *req)
     cJSON_AddNumberToObject(obj, "facility",  Config::SyslogConfig::GetFacility());
     cJSON_AddNumberToObject(obj, "min_level", Config::SyslogConfig::GetMinLevel());
     cJSON_AddStringToObject(obj, "id",        s_syslog_id);
+    cJSON_AddStringToObject(obj, "format",    Config::SyslogConfig::GetFormatRfc5424() ? "5424" : "3164");
     send_json(req, obj);
     return ESP_OK;
 }
@@ -1436,12 +1549,18 @@ static esp_err_t api_syslog_post(httpd_req_t *req)
     cJSON *jFacility = cJSON_GetObjectItem(json, "facility");
     cJSON *jMinLevel = cJSON_GetObjectItem(json, "min_level");
     cJSON *jId       = cJSON_GetObjectItem(json, "id");
+    cJSON *jFormat   = cJSON_GetObjectItem(json, "format");
 
-    if (cJSON_IsBool(jEnabled))   Config::SyslogConfig::SetEnabled(cJSON_IsTrue(jEnabled));
-    if (cJSON_IsString(jServer))  Config::SyslogConfig::SetServer(trim_str(jServer->valuestring));
-    if (cJSON_IsNumber(jPort))    Config::SyslogConfig::SetPort((uint16_t)jPort->valuedouble);
+    if (cJSON_IsBool(jEnabled))    Config::SyslogConfig::SetEnabled(cJSON_IsTrue(jEnabled));
+    if (cJSON_IsString(jServer))   Config::SyslogConfig::SetServer(trim_str(jServer->valuestring));
+    if (cJSON_IsNumber(jPort))     Config::SyslogConfig::SetPort((uint16_t)jPort->valuedouble);
     if (cJSON_IsNumber(jFacility)) Config::SyslogConfig::SetFacility((uint8_t)jFacility->valuedouble);
     if (cJSON_IsNumber(jMinLevel)) Config::SyslogConfig::SetMinLevel((uint8_t)jMinLevel->valuedouble);
+    if (cJSON_IsString(jFormat)) {
+        bool rfc5424 = strcmp(jFormat->valuestring, "3164") != 0;
+        Config::SyslogConfig::SetFormatRfc5424(rfc5424);
+        syslog_set_format(rfc5424);
+    }
     if (cJSON_IsString(jId) && jId->valuestring[0]) {
         snprintf(s_syslog_id, sizeof(s_syslog_id), "%s", jId->valuestring);
         nvs_handle_t h;
@@ -2177,6 +2296,131 @@ static esp_err_t api_upload_remotes(httpd_req_t *req)
 
     char msg[64];
     snprintf(msg, sizeof(msg), "Restored %d remote link(s).", count);
+    send_result(req, true, msg);
+    return ESP_OK;
+}
+
+// ─── POST /api/upload/iohomecontrol ─────────────────────────────────────────
+// Accepts an iohomecontrol backup devices JSON: object keyed by node_id hex,
+// each value: {key, sequence, type, manufacturer_id, name, travel_time, paired}
+
+static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+    char *body = nullptr;
+    if (read_body_large(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body (too large or bad format?)"); return ESP_OK; }
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        send_result(req, false, "Invalid JSON: expected object keyed by node_id");
+        return ESP_OK;
+    }
+
+    std::map<std::string, Helpers::StoredIoDevice> allDevices;
+    Helpers::DeviceStorage::LoadAllIoDevices(allDevices);
+
+    int imported = 0;
+    int skipped  = 0;
+    for (cJSON *entry = root->child; entry; entry = entry->next)
+    {
+        const char *nodeIdStr = entry->string;
+        if (!nodeIdStr || strlen(nodeIdStr) != 6 || !cJSON_IsObject(entry)) { skipped++; continue; }
+
+        // Parse key_1w (32 hex chars → 16 bytes)
+        cJSON *keyItem = cJSON_GetObjectItem(entry, "key");
+        if (!cJSON_IsString(keyItem) || strlen(keyItem->valuestring) != 32) { skipped++; continue; }
+
+        Helpers::StoredIoDevice sd = {};
+        iohome::IoDevice &dev = sd.device;
+        dev.position = iohome::UNKNOWN_POSITION;
+        dev.target   = iohome::UNKNOWN_POSITION;
+        dev.tilt     = iohome::UNKNOWN_POSITION;
+        dev.is_stopped = true;
+
+        // node_id
+        for (int i = 0; i < iohome::NODE_ID_SIZE; i++)
+        {
+            char byte[3] = {nodeIdStr[i * 2], nodeIdStr[i * 2 + 1], 0};
+            dev.info.node_id[i] = (uint8_t)strtoul(byte, nullptr, 16);
+        }
+
+        // key_1w
+        const char *ks = keyItem->valuestring;
+        for (int i = 0; i < iohome::AES_KEY_SIZE; i++)
+        {
+            char byte[3] = {ks[i * 2], ks[i * 2 + 1], 0};
+            dev.info.key_1w[i] = (uint8_t)strtoul(byte, nullptr, 16);
+        }
+
+        dev.info.protocol_mode = iohome::ProtocolMode::PROTO_1W;
+
+        // sequence — stored as a 4-char hex string ("00EF") in iohomecontrol backups
+        cJSON *seqItem = cJSON_GetObjectItem(entry, "sequence");
+        if (cJSON_IsString(seqItem) && strlen(seqItem->valuestring) == 4) {
+            char hi[3] = {seqItem->valuestring[0], seqItem->valuestring[1], 0};
+            char lo[3] = {seqItem->valuestring[2], seqItem->valuestring[3], 0};
+            dev.info.sequence_1w = (uint16_t)((strtoul(hi, nullptr, 16) << 8) | strtoul(lo, nullptr, 16));
+        } else if (cJSON_IsNumber(seqItem)) {
+            dev.info.sequence_1w = (uint16_t)(int)seqItem->valuedouble;
+        } else {
+            dev.info.sequence_1w = 1;
+        }
+
+        // The iohomecontrol "type" field is a broadcast-target routing code {0,0},
+        // not the io-homecontrol DeviceType enum — the two numbering systems are
+        // unrelated. Default to ROLLER_SHUTTER so the UI shows open/close/stop/
+        // position controls for all imported devices. The user can adjust per-device
+        // if needed. A numeric "device_type" override is still accepted for tools
+        // that export the correct enum value.
+        cJSON *typeOverride = cJSON_GetObjectItem(entry, "device_type");
+        dev.info.device_type = cJSON_IsNumber(typeOverride)
+            ? static_cast<iohome::DeviceType>((uint8_t)typeOverride->valuedouble)
+            : iohome::DeviceType::ROLLER_SHUTTER;
+
+        // manufacturer
+        cJSON *mfItem = cJSON_GetObjectItem(entry, "manufacturer_id");
+        dev.info.manufacturer = cJSON_IsNumber(mfItem)
+            ? static_cast<iohome::Manufacturer>((uint8_t)mfItem->valuedouble)
+            : iohome::Manufacturer::SOMFY;
+
+        // name (fall back to node_id if absent)
+        cJSON *nameItem = cJSON_GetObjectItem(entry, "name");
+        if (cJSON_IsString(nameItem) && nameItem->valuestring[0])
+            strncpy(dev.info.name, nameItem->valuestring, iohome::CMD_PARAM_NAME_MAXSIZE - 1);
+        else
+            strncpy(dev.info.name, nodeIdStr, iohome::CMD_PARAM_NAME_MAXSIZE - 1);
+
+        // transit_time_ms: travel_time in iohomecontrol is stored in seconds
+        cJSON *ttItem = cJSON_GetObjectItem(entry, "travel_time");
+        if (cJSON_IsNumber(ttItem) && ttItem->valuedouble > 0)
+            sd.transit_time_ms = (uint32_t)(ttItem->valuedouble * 1000.0);
+
+        // is_low_power: default true for 1W motors (most are battery/solar)
+        dev.info.is_low_power = true;
+        // Copy transit_time into the IoDevice itself (LoadIoDevicesFromStorage does this at boot)
+        dev.transit_time_ms = sd.transit_time_ms;
+
+        std::string deviceID(nodeIdStr);
+        allDevices[deviceID] = sd;
+
+        // Register in live device map only — do NOT call mIoHome->RestoreDevice for
+        // 1W devices: the 2W radio layer would try to poll them and cause a transmit storm.
+        {
+            std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
+            auto it = s_manager->mIoDevices.find(deviceID);
+            if (it != s_manager->mIoDevices.end()) it->second = sd.device;
+            else s_manager->mIoDevices.insert({deviceID, sd.device});
+        }
+
+        imported++;
+    }
+    cJSON_Delete(root);
+    Helpers::DeviceStorage::SaveAllIoDevices(allDevices);
+
+    char msg[80];
+    snprintf(msg, sizeof(msg), "Imported %d device(s), skipped %d. Reboot to fully apply.", imported, skipped);
     send_result(req, true, msg);
     return ESP_OK;
 }
@@ -3341,8 +3585,9 @@ void web_server_start(void *ioRtsManager)
     reg("/api/syslog/ping",       HTTP_POST, api_syslog_ping_post);
     reg("/api/download/devices",  HTTP_GET,  api_download_devices);
     reg("/api/download/remotes",  HTTP_GET,  api_download_remotes);
-    reg("/api/upload/devices",    HTTP_POST, api_upload_devices);
-    reg("/api/upload/remotes",    HTTP_POST, api_upload_remotes);
+    reg("/api/upload/devices",        HTTP_POST, api_upload_devices);
+    reg("/api/upload/remotes",        HTTP_POST, api_upload_remotes);
+    reg("/api/upload/iohomecontrol",  HTTP_POST, api_upload_iohomecontrol);
     reg("/api/ota",               HTTP_POST, api_ota_post);
     reg("/api/ota/url",           HTTP_POST, api_ota_url_post);
     reg("/api/ota/web",           HTTP_POST, api_ota_web_post);

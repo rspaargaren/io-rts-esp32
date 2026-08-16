@@ -847,9 +847,10 @@ namespace iohome
             {
               ownNode      = (memcmp(it->second.info.node_id, mOwnNodeId, NODE_ID_SIZE) == 0);
               isDeleted    = it->second.is_deleted;
-              needsName    = !ownNode && !isDeleted && (strlen(it->second.info.name) <= 1);
-              needsType    = !ownNode && !isDeleted && (it->second.info.device_type == DeviceType::UNKNOWN);
-              shouldUpdate = !ownNode && !isDeleted &&
+              bool is1w    = (it->second.info.protocol_mode == ProtocolMode::PROTO_1W);
+              needsName    = !ownNode && !isDeleted && !is1w && (strlen(it->second.info.name) <= 1);
+              needsType    = !ownNode && !isDeleted && !is1w && (it->second.info.device_type == DeviceType::UNKNOWN);
+              shouldUpdate = !ownNode && !isDeleted && !is1w &&
                              ((esp_timer_get_time() > it->second.last_status_timestamp + STATUS_UPDATE_MAX_TIME_US) ||
                               (it->second.next_status_update_timestamp < esp_timer_get_time()));
             }
@@ -2074,7 +2075,7 @@ namespace iohome
   bool IoHomeControl::SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd)
   {
     uint8_t tries = 3;
-    bool setStartFlagToAuthentResponse = false;
+    bool setStartFlagToAuthentResponse = true;
 
     while (tries > 0)
     {

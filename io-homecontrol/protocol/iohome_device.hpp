@@ -8,6 +8,8 @@
 
 namespace iohome
 {
+    enum class ProtocolMode : uint8_t { PROTO_2W = 0, PROTO_1W = 1 };
+
     constexpr float UNKNOWN_POSITION = 212.0;
     constexpr float SWITCH_LIGHT_ON_POSITION = 0.0;
     constexpr float SWITCH_LIGHT_OFF_POSITION = 100.0;
@@ -23,6 +25,9 @@ namespace iohome
         uint8_t device_subtype;              // Device sub-type
         bool is_openclose_inverted;          // Device OPEN/CLOSE is inverted (0 for CLOSED, 100 for OPEN)
         bool is_low_power;                   // Device is battery/solar powered (requires LOW_POWER flag in frames)
+        ProtocolMode protocol_mode = ProtocolMode::PROTO_2W; // 2W or 1W, fixed at pairing time
+        uint16_t     sequence_1w   = 0;                       // 1W rolling TX counter, persisted after every send
+        uint8_t      key_1w[AES_KEY_SIZE]  = {};              // 1W per-device AES key, generated at pairing
     };
 
     struct IoDevice
@@ -38,6 +43,7 @@ namespace iohome
         // Fields persisted via StoredIoDevice, copied into IoDevice at load time
         uint32_t transit_time_ms = 0;         // Time to travel full range in ms (0 = uncalibrated)
         bool quiet = false;                   // Slower, quieter motor operation
+        char local_name[64];                  // User-defined display name; overrides info.name if non-empty
         // Transient movement-tracking fields (not persisted, zero at boot)
         int64_t move_start_us  = 0;           // esp_timer_get_time() when the last position command was sent (0 = no active movement)
         float   move_start_pos = 0.0f;        // Position at the time the command was sent
@@ -66,5 +72,11 @@ namespace iohome
     /// @param type device type value from enum
     /// @return device type
     std::string IoDeviceType(DeviceType type);
+
+    /// @brief Returns the effective display name: local_name if set, otherwise info.name.
+    inline std::string device_display_name(const IoDevice &dev)
+    {
+        return (dev.local_name[0] != '\0') ? std::string(dev.local_name) : std::string(dev.info.name);
+    }
     
 } // namespace iohome

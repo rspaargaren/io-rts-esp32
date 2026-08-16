@@ -7,6 +7,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_random.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "ioRtsMan";
@@ -413,6 +414,8 @@ namespace IoRts
             iohome::IoDevice dev = storedDevice.device;
             dev.transit_time_ms = storedDevice.transit_time_ms;
             dev.quiet = storedDevice.quiet;
+            strncpy(dev.local_name, storedDevice.local_name.c_str(), sizeof(dev.local_name) - 1);
+            dev.local_name[sizeof(dev.local_name) - 1] = '\0';
 
             // Add to our local map regardless of active/inactive state
             mIoDevicesMutex.lock();
@@ -420,12 +423,19 @@ namespace IoRts
             mIoDevicesMutex.unlock();
             if (!dev.is_deleted)
             {
-                // Only register active devices with the radio layer
-                mIoHome->RestoreDevice(deviceID, dev);
+                bool is1w = (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+                if (!is1w)
+                {
+                    // Only register 2W devices with the radio layer.
+                    // 1W devices are simplex — registering them with IoHomeControl
+                    // would trigger 2W status polls that never get a response.
+                    mIoHome->RestoreDevice(deviceID, dev);
+                }
                 for (const std::string &remoteID : storedDevice.linked_remotes)
                     mIoHome->LinkRemoteToDevice(remoteID, deviceID);
-                ESP_LOGI(TAG, "Restored device %s (%s) with %u remote(s), transit=%ums",
-                         deviceID.c_str(), dev.info.name, storedDevice.linked_remotes.size(), dev.transit_time_ms);
+                ESP_LOGI(TAG, "Restored %s device %s (%s) with %u remote(s), transit=%ums",
+                         is1w ? "1W" : "2W", deviceID.c_str(), dev.info.name,
+                         storedDevice.linked_remotes.size(), dev.transit_time_ms);
             }
             else
             {
@@ -543,6 +553,34 @@ namespace IoRts
         return err == ESP_OK;
     }
 
+    bool IoRtsManager::SetLocalName(const std::string &deviceID, const std::string &name)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool found = it != mIoDevices.end();
+        if (found) {
+            strncpy(it->second.local_name, name.c_str(), sizeof(it->second.local_name) - 1);
+            it->second.local_name[sizeof(it->second.local_name) - 1] = '\0';
+        }
+        mIoDevicesMutex.unlock();
+
+        if (!found)
+            return false;
+
+        Helpers::StoredIoDevice stored;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) != ESP_OK)
+            return false;
+        stored.local_name = name;
+        esp_err_t err = Helpers::DeviceStorage::SaveIoDevice(deviceID, stored);
+        if (err == ESP_OK)
+        {
+            ESP_LOGI(TAG, "Local name for %s set to '%s'", deviceID.c_str(), name.c_str());
+            if (sMqttHelper != nullptr)
+                sMqttHelper->SendDiscovery();
+        }
+        return err == ESP_OK;
+    }
+
     void IoRtsManager::StartKeySniff()
     {
         if (mIoHome != nullptr)
@@ -606,6 +644,7 @@ namespace IoRts
                 mIoHome->SetIgnoreAutoUpdate(IoHomeConfig::isIgnoreAutoUpdateEnabled());
                 mIoHome->Begin(IoHomeConfig::GetIoNodeId(), IoHomeConfig::GetIoSystemKey(), IoHomeConfig::isPassiveModeEnabled());
                 mIoHome->ConfigureRadio(IoHomeConfig::GetTxPower());
+                mIo1W = new iohome::Io1WControl(mIoHome);
                 mIoHome->SetUnknownSenderCallback(unknownSenderCallback);
                 mIoHome->SetKeySniffCallback(keySniffCallback);
                 mIoHome->SetMovementStartedCallback([](const std::string &deviceID, uint32_t transit_ms, float dist) {
@@ -626,6 +665,238 @@ namespace IoRts
         {
             sMqttHelper = nullptr;
         }
+    }
+
+    // =========================================================================
+    // Unified command dispatch (2W and 1W)
+    // =========================================================================
+
+    bool IoRtsManager::OpenDevice(const std::string &deviceID, bool quiet)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool is1w = (it != mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+        mIoDevicesMutex.unlock();
+
+        if (is1w && mIo1W)
+        {
+            mIoDevicesMutex.lock();
+            bool ok = mIo1W->Send(mIoDevices.at(deviceID).info, 0.0f);
+            mIoDevicesMutex.unlock();
+            if (ok) SaveDevice1WSequence(deviceID);
+            return ok;
+        }
+        return mIoHome->OpenDevice(deviceID, quiet);
+    }
+
+    bool IoRtsManager::CloseDevice(const std::string &deviceID, bool quiet)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool is1w = (it != mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+        mIoDevicesMutex.unlock();
+
+        if (is1w && mIo1W)
+        {
+            mIoDevicesMutex.lock();
+            bool ok = mIo1W->Send(mIoDevices.at(deviceID).info, 100.0f);
+            mIoDevicesMutex.unlock();
+            if (ok) SaveDevice1WSequence(deviceID);
+            return ok;
+        }
+        return mIoHome->CloseDevice(deviceID, quiet);
+    }
+
+    bool IoRtsManager::SetDevicePosition(const std::string &deviceID, uint8_t position, bool quiet)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool is1w = (it != mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+        mIoDevicesMutex.unlock();
+
+        if (is1w && mIo1W)
+        {
+            mIoDevicesMutex.lock();
+            bool ok = mIo1W->Send(mIoDevices.at(deviceID).info, (float)position);
+            mIoDevicesMutex.unlock();
+            if (ok) SaveDevice1WSequence(deviceID);
+            return ok;
+        }
+        return mIoHome->SetDevicePosition(deviceID, position, quiet);
+    }
+
+    bool IoRtsManager::StopDevice(const std::string &deviceID)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        bool is1w = (it != mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+        float cur_pos = (it != mIoDevices.end()) ? it->second.position : 0.0f;
+        mIoDevicesMutex.unlock();
+
+        if (is1w && mIo1W)
+        {
+            mIoDevicesMutex.lock();
+            bool ok = mIo1W->Stop(mIoDevices.at(deviceID).info);
+            mIoDevicesMutex.unlock();
+            if (ok) SaveDevice1WSequence(deviceID);
+            return ok;
+        }
+        return mIoHome->StopDevice(deviceID);
+    }
+
+    void IoRtsManager::SaveDevice1WSequence(const std::string &deviceID)
+    {
+        // Read-modify-write: load the full StoredIoDevice from flash to preserve
+        // linked_remotes, quiet, transit_time_ms, then patch sequence_1w.
+        Helpers::StoredIoDevice sd;
+        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, sd) != ESP_OK) return;
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it != mIoDevices.end())
+                sd.device.info.sequence_1w = it->second.info.sequence_1w;
+        }
+        Helpers::DeviceStorage::SaveIoDevice(deviceID, sd);
+    }
+
+    std::string IoRtsManager::Pair1WDevice(const std::string &name, iohome::DeviceType type, iohome::Manufacturer manufacturer)
+    {
+        if (!mIo1W) return "";
+
+        uint8_t rand_id[3];
+        esp_fill_random(rand_id, 3);
+        char id_str[7];
+        snprintf(id_str, sizeof(id_str), "%02X%02X%02X", rand_id[0], rand_id[1], rand_id[2]);
+
+        iohome::IoDeviceInformation info = {};
+        info.protocol_mode = iohome::ProtocolMode::PROTO_1W;
+        memcpy(info.node_id, rand_id, iohome::NODE_ID_SIZE);
+        strncpy(info.name, name.c_str(), sizeof(info.name) - 1);
+        info.device_type  = type;
+        info.manufacturer = manufacturer;
+
+        if (!mIo1W->PairDevice(info))
+        {
+            ESP_LOGE("IoRtsManager", "Pair1WDevice: radio TX failed");
+            return "";
+        }
+
+        iohome::IoDevice dev = {};
+        dev.info            = info;
+        dev.position        = iohome::UNKNOWN_POSITION;
+        dev.target          = iohome::UNKNOWN_POSITION;
+        dev.tilt            = iohome::UNKNOWN_POSITION;
+        dev.is_stopped      = true;
+        dev.transit_time_ms = 0;
+
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            mIoDevices[id_str] = dev;
+        }
+
+        Helpers::StoredIoDevice sd;
+        sd.device = dev;
+        Helpers::DeviceStorage::SaveIoDevice(id_str, sd);
+
+        ESP_LOGI("IoRtsManager", "Pair1WDevice: paired '%s' as %s", name.c_str(), id_str);
+        return id_str;
+    }
+
+    bool IoRtsManager::ReSendPair1W(const std::string &deviceID)
+    {
+        if (!mIo1W) return false;
+
+        iohome::IoDeviceInformation snap;
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it == mIoDevices.end() || it->second.info.protocol_mode != iohome::ProtocolMode::PROTO_1W)
+                return false;
+            snap = it->second.info;
+        }
+
+        bool ok = mIo1W->ReSendPair(snap);
+
+        if (ok) {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it != mIoDevices.end())
+                it->second.info.sequence_1w = snap.sequence_1w;
+        }
+        if (ok) SaveDevice1WSequence(deviceID);
+        return ok;
+    }
+
+    bool IoRtsManager::Wink1WDevice(const std::string &deviceID)
+    {
+        if (!mIo1W) return false;
+
+        iohome::IoDeviceInformation snap;
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it == mIoDevices.end() || it->second.info.protocol_mode != iohome::ProtocolMode::PROTO_1W)
+                return false;
+            snap = it->second.info;
+        }
+
+        bool ok = mIo1W->WinkDevice(snap);
+
+        if (ok) {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it != mIoDevices.end())
+                it->second.info.sequence_1w = snap.sequence_1w;
+        }
+        if (ok) SaveDevice1WSequence(deviceID);
+        return ok;
+    }
+
+    bool IoRtsManager::SendRemove1W(const std::string &deviceID)
+    {
+        if (!mIo1W) return false;
+
+        iohome::IoDeviceInformation snap;
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it == mIoDevices.end() || it->second.info.protocol_mode != iohome::ProtocolMode::PROTO_1W)
+                return false;
+            snap = it->second.info;
+        }
+
+        bool ok = mIo1W->UnpairDevice(snap);
+
+        if (ok) {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            auto it = mIoDevices.find(deviceID);
+            if (it != mIoDevices.end())
+                it->second.info.sequence_1w = snap.sequence_1w;
+        }
+        if (ok) SaveDevice1WSequence(deviceID);
+        return ok;
+    }
+
+    bool IoRtsManager::Unpair1WDevice(const std::string &deviceID)
+    {
+        mIoDevicesMutex.lock();
+        auto it = mIoDevices.find(deviceID);
+        if (it == mIoDevices.end() || it->second.info.protocol_mode != iohome::ProtocolMode::PROTO_1W)
+        {
+            mIoDevicesMutex.unlock();
+            return false;
+        }
+        iohome::IoDeviceInformation info = it->second.info;
+        mIoDevicesMutex.unlock();
+
+        if (mIo1W) mIo1W->UnpairDevice(info);
+
+        {
+            std::lock_guard<std::mutex> lock(mIoDevicesMutex);
+            mIoDevices.erase(deviceID);
+        }
+        Helpers::DeviceStorage::RemoveIoDevice(deviceID);
+        return true;
     }
 
     extern "C" bool oled_mqtt_connected(void)

@@ -56,5 +56,14 @@ namespace Config
         /// @param level minimum severity (7=debug, 6=info, 4=warning, 3=error)
         /// @return ESP_OK if configuration put to storage without error
         static esp_err_t SetMinLevel(uint8_t level);
+
+        /// @brief Get syslog wire format from configuration storage
+        /// @return true = RFC 5424, false = RFC 3164
+        static bool GetFormatRfc5424();
+
+        /// @brief Set syslog wire format to configuration storage
+        /// @param rfc5424 true = RFC 5424, false = RFC 3164
+        /// @return ESP_OK if configuration put to storage without error
+        static esp_err_t SetFormatRfc5424(bool rfc5424);
     };
 }

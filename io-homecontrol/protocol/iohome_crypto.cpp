@@ -255,5 +255,63 @@ namespace iohome
       return (diff == 0);
     }
 
+    // ============================================================================
+    // 1W Crypto
+    // ============================================================================
+
+    bool create_1w_hmac(
+        const uint8_t *frame_cmd_data, size_t frame_len,
+        const uint8_t seq[2],
+        const uint8_t key[AES_KEY_SIZE],
+        uint8_t hmac_out[HMAC_SIZE])
+    {
+      // IV layout: frame bytes [0..7] (0x55-padded), checksum [8..9], seq [10..11], 0x55 [12..15]
+      uint8_t iv[AES_BLOCK_SIZE] = {};
+      uint8_t chk1 = 0, chk2 = 0;
+
+      for (size_t i = 0; i < frame_len; i++)
+      {
+        compute_checksum(frame_cmd_data[i], chk1, chk2);
+        if (i < 8) iv[i] = frame_cmd_data[i];
+      }
+      for (size_t j = frame_len; j < 8; j++) iv[j] = IV_PADDING;
+
+      iv[8]  = chk1;
+      iv[9]  = chk2;
+      iv[10] = seq[0];
+      iv[11] = seq[1];
+      iv[12] = iv[13] = iv[14] = iv[15] = IV_PADDING;
+
+      uint8_t block[AES_BLOCK_SIZE];
+      if (!aes128_encrypt(iv, key, block)) return false;
+      memcpy(hmac_out, block, HMAC_SIZE);
+      return true;
+    }
+
+    bool encrypt_1w_key(
+        const uint8_t controller_node_id[NODE_ID_SIZE],
+        const uint8_t key_in[AES_KEY_SIZE],
+        uint8_t enc_key_out[AES_KEY_SIZE])
+    {
+      // IV = controller node address repeated across 16 bytes
+      // [0..2]=node, [3..5]=node, [6..8]=node, [9..11]=node, [12..14]=node, [15]=node[0]
+      uint8_t iv[AES_BLOCK_SIZE] = {};
+      for (int i = 0; i < 13; i += 3)
+      {
+        iv[i]     = controller_node_id[0];
+        iv[i + 1] = controller_node_id[1];
+        iv[i + 2] = controller_node_id[2];
+      }
+      iv[15] = controller_node_id[0];
+
+      // CFB128 over exactly one block = AES_ECB(TRANSFER_KEY, IV) XOR key_in
+      // (same pattern as crypt_2w_key, different IV construction)
+      uint8_t keystream[AES_BLOCK_SIZE];
+      if (!aes128_encrypt(iv, TRANSFER_KEY, keystream)) return false;
+      for (int i = 0; i < AES_KEY_SIZE; i++)
+        enc_key_out[i] = key_in[i] ^ keystream[i];
+      return true;
+    }
+
   } // namespace crypto
 } // namespace iohome

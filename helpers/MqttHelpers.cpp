@@ -902,7 +902,7 @@ namespace Helpers
                         {
                             if (!dev.is_deleted)
                             {
-                                std::string option = std::string(dev.info.name) + " (" + id + ")";
+                                std::string option = iohome::device_display_name(dev) + " (" + id + ")";
                                 cJSON_AddItemToArray(options, cJSON_CreateString(option.c_str()));
                                 hasActive = true;
                             }
@@ -957,7 +957,7 @@ namespace Helpers
                         {
                             if (dev.is_deleted)
                             {
-                                std::string option = std::string(dev.info.name) + " (" + id + ")";
+                                std::string option = iohome::device_display_name(dev) + " (" + id + ")";
                                 cJSON_AddItemToArray(options, cJSON_CreateString(option.c_str()));
                                 hasInactive = true;
                             }
@@ -1049,7 +1049,7 @@ namespace Helpers
             else
             {
                 error = error || (cJSON_AddStringToObject(dev, "ids", device_id.c_str()) == NULL);                                         // identifiers
-                error = error || (cJSON_AddStringToObject(dev, "name", it->second.info.name) == NULL);                                     // name
+                error = error || (cJSON_AddStringToObject(dev, "name", iohome::device_display_name(it->second).c_str()) == NULL);           // name
                 error = error || (cJSON_AddStringToObject(dev, "mf", IoDeviceManufacturer(it->second.info.manufacturer).c_str()) == NULL); // manufacturer
                 error = error || (cJSON_AddStringToObject(dev, "mdl", IoDeviceType(it->second.info.device_type).c_str()) == NULL);         // model
                 error = error || (cJSON_AddStringToObject(dev, "sn", it->first.c_str()) == NULL);                                          // serial_number (node address)
@@ -1188,7 +1188,7 @@ namespace Helpers
                             {
                                 error = error || (cJSON_AddStringToObject(fav, "p", "button") == NULL);                      // platform
                                 error = error || (cJSON_AddStringToObject(fav, "unique_id", device_id_fav.c_str()) == NULL); // unique_id
-                                std::string favName = it->second.info.name + std::string(" Favorite position");
+                                std::string favName = iohome::device_display_name(it->second) + " Favorite position";
                                 error = error || (cJSON_AddStringToObject(fav, "name", favName.c_str()) == NULL);                           // name
                                 error = error || (cJSON_AddStringToObject(fav, "command_topic", device_cmd_fav_pos_topic.c_str()) == NULL); // command_topic
                             }
@@ -1227,7 +1227,7 @@ namespace Helpers
                     // Common fields for all supported device types
                     error = error || (cJSON_AddStringToObject(cmp, "p", device_platform.c_str()) == NULL);              // platform
                     error = error || (cJSON_AddStringToObject(cmp, "unique_id", device_id.c_str()) == NULL);            // unique_id
-                    error = error || (cJSON_AddStringToObject(cmp, "name", it->second.info.name) == NULL);              // name
+                    error = error || (cJSON_AddStringToObject(cmp, "name", iohome::device_display_name(it->second).c_str()) == NULL); // name
                     error = error || (cJSON_AddStringToObject(cmp, "command_topic", device_cmd_topic.c_str()) == NULL); // command_topic
                     error = error || (cJSON_AddStringToObject(cmp, "state_topic", device_state_topic.c_str()) == NULL); // state_topic
                 }
@@ -1244,7 +1244,7 @@ namespace Helpers
                     {
                         error = error || (cJSON_AddStringToObject(ident, "p", "button") == NULL);                        // platform
                         error = error || (cJSON_AddStringToObject(ident, "unique_id", device_id_ident.c_str()) == NULL); // unique_id
-                        std::string identName = it->second.info.name + std::string(" Identify");
+                        std::string identName = iohome::device_display_name(it->second) + " Identify";
                         error = error || (cJSON_AddStringToObject(ident, "name", identName.c_str()) == NULL);                 // name
                         error = error || (cJSON_AddStringToObject(ident, "command_topic", device_cmd_topic.c_str()) == NULL); // command_topic — uses /set
                         error = error || (cJSON_AddStringToObject(ident, "payload_press", "IDENTIFY") == NULL);               // payload_press
@@ -1256,7 +1256,7 @@ namespace Helpers
                 if (!error)
                 {
                     std::string deviceNodeID = it->first;
-                    std::string devName = it->second.info.name;
+                    std::string devName = iohome::device_display_name(it->second);
                     // rename text
                     {
                         std::string uid = MQTT_CLIENT_PREFIX_IO + deviceNodeID + "_rename";
@@ -1549,7 +1549,7 @@ namespace Helpers
                 if (dev.is_deleted)
                 {
                     if (!list.empty()) list += "; ";
-                    list += std::string(dev.info.name) + " (" + id + ")";
+                    list += iohome::device_display_name(dev) + " (" + id + ")";
                 }
             }
         }

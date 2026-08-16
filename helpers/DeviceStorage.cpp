@@ -65,6 +65,18 @@ namespace Helpers
         cJSON_AddBoolToObject(obj, "is_low_power",        dev.info.is_low_power);
         cJSON_AddNumberToObject(obj, "transit_ms", sd.transit_time_ms);
         cJSON_AddBoolToObject(obj, "quiet", sd.quiet);
+        if (!sd.local_name.empty())
+            cJSON_AddStringToObject(obj, "local_name", sd.local_name.c_str());
+
+        if (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W)
+        {
+            cJSON_AddStringToObject(obj, "protocol", "1w");
+            cJSON_AddStringToObject(obj, "sequence", std::format("{:04X}", dev.info.sequence_1w).c_str());
+            std::string keyHex;
+            for (int i = 0; i < iohome::AES_KEY_SIZE; i++)
+                keyHex += std::format("{:02x}", dev.info.key_1w[i]);
+            cJSON_AddStringToObject(obj, "key_1w", keyHex.c_str());
+        }
 
         cJSON *remotes = cJSON_AddArrayToObject(obj, "remotes");
         if (remotes)
@@ -138,6 +150,30 @@ namespace Helpers
 
         cJSON *quietItem = cJSON_GetObjectItem(obj, "quiet");
         sd.quiet = cJSON_IsBool(quietItem) ? cJSON_IsTrue(quietItem) : false;
+
+        cJSON *localNameItem = cJSON_GetObjectItem(obj, "local_name");
+        sd.local_name = (cJSON_IsString(localNameItem) && localNameItem->valuestring[0]) ? localNameItem->valuestring : "";
+        strncpy(sd.device.local_name, sd.local_name.c_str(), sizeof(sd.device.local_name) - 1);
+        sd.device.local_name[sizeof(sd.device.local_name) - 1] = '\0';
+
+        cJSON *protoItem = cJSON_GetObjectItem(obj, "protocol");
+        if (cJSON_IsString(protoItem) && strcmp(protoItem->valuestring, "1w") == 0)
+        {
+            dev.info.protocol_mode = iohome::ProtocolMode::PROTO_1W;
+            cJSON *seqItem = cJSON_GetObjectItem(obj, "sequence");
+            if (cJSON_IsString(seqItem))
+                dev.info.sequence_1w = (uint16_t)strtoul(seqItem->valuestring, nullptr, 16);
+            cJSON *keyItem = cJSON_GetObjectItem(obj, "key_1w");
+            if (cJSON_IsString(keyItem))
+            {
+                const char *ks = keyItem->valuestring;
+                for (int i = 0; i < iohome::AES_KEY_SIZE && ks[i * 2] && ks[i * 2 + 1]; i++)
+                {
+                    char byte[3] = {ks[i * 2], ks[i * 2 + 1], 0};
+                    dev.info.key_1w[i] = (uint8_t)strtoul(byte, nullptr, 16);
+                }
+            }
+        }
 
         sd.linked_remotes.clear();
         cJSON *remotesArr = cJSON_GetObjectItem(obj, "remotes");

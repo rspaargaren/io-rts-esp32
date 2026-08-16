@@ -10,6 +10,7 @@ static const std::string SYSLOG_SERVER     = "server";
 static const std::string SYSLOG_PORT       = "port";
 static const std::string SYSLOG_FACILITY   = "facility";
 static const std::string SYSLOG_MIN_LEVEL  = "min_level";
+static const std::string SYSLOG_FORMAT     = "format";
 
 namespace Config
 {
@@ -105,5 +106,18 @@ namespace Config
     esp_err_t SyslogConfig::SetMinLevel(uint8_t level)
     {
         return NvsHelpers::SetValue(SYSLOG_NAMESPACE, SYSLOG_MIN_LEVEL, level);
+    }
+
+    bool SyslogConfig::GetFormatRfc5424()
+    {
+        uint8_t val = 1; // default: RFC 5424
+        NvsHelpers::GetValue(SYSLOG_NAMESPACE, SYSLOG_FORMAT, val);
+        return val != 0;
+    }
+
+    esp_err_t SyslogConfig::SetFormatRfc5424(bool rfc5424)
+    {
+        uint8_t val = rfc5424 ? 1 : 0;
+        return NvsHelpers::SetValue(SYSLOG_NAMESPACE, SYSLOG_FORMAT, val);
     }
 }

@@ -262,7 +262,7 @@ static int do_iodeleteinactive_cmd(int argc, char **argv)
         std::lock_guard<std::mutex> guard(sIoRtsManager->mIoDevicesMutex);
         for (const auto &[id, dev] : sIoRtsManager->mIoDevices)
             if (dev.is_deleted)
-                inactive.push_back({id, std::string(dev.info.name)});
+                inactive.push_back({id, iohome::device_display_name(dev)});
     }
 
     if (inactive.empty())
@@ -869,7 +869,7 @@ static int do_iolistdevices_cmd(int argc, char **argv)
         int32_t last_update = (esp_timer_get_time() - it->second.last_status_timestamp) / 1000000;        // seconds ago
         int32_t next_update = (it->second.next_status_update_timestamp - esp_timer_get_time()) / 1000000; // seconds in the future
         ESP_LOGI(TAG, "Device ID=%s, Name=%s, type=0x%02X, subtype=0x%02X, Manufacturer=%s, Deleted=%s, Inverted=%s, updated %ds ago, next update in %d seconds",
-                 it->first.c_str(), it->second.info.name,
+                 it->first.c_str(), iohome::device_display_name(it->second).c_str(),
                  it->second.info.device_type, it->second.info.device_subtype, IoDeviceManufacturer(it->second.info.manufacturer).c_str(),
                  it->second.is_deleted ? "Yes" : "No", it->second.info.is_openclose_inverted ? "Yes" : "No",
                  last_update, next_update);
@@ -1101,6 +1101,147 @@ void register_iotilt(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&iotilt_cmd));
 }
 
+// ******************* IO 1W PAIR ********************
+
+static struct
+{
+    struct arg_str *name;
+    struct arg_int *type;
+    struct arg_int *manufacturer;
+    struct arg_end *end;
+} io1wpair_args;
+
+static int do_io1wpair_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&io1wpair_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, io1wpair_args.end, argv[0]);
+        return 1;
+    }
+    // Type 0 = broadcast to all device types (00003F); Somfy is the common manufacturer
+    iohome::DeviceType type = (io1wpair_args.type->count > 0)
+        ? static_cast<iohome::DeviceType>(io1wpair_args.type->ival[0])
+        : iohome::DeviceType::UNKNOWN;
+    iohome::Manufacturer mfr = (io1wpair_args.manufacturer->count > 0)
+        ? static_cast<iohome::Manufacturer>(io1wpair_args.manufacturer->ival[0])
+        : iohome::Manufacturer::SOMFY;
+    std::string id = sIoRtsManager->Pair1WDevice(io1wpair_args.name->sval[0], type, mfr);
+    if (id.empty())
+        ESP_LOGE(TAG, "io_1w_pair: pairing failed");
+    else
+        ESP_LOGI(TAG, "io_1w_pair: paired '%s' as %s", io1wpair_args.name->sval[0], id.c_str());
+    return 0;
+}
+
+static void register_io1wpair(void)
+{
+    io1wpair_args.name         = arg_str1(NULL, NULL, "<name>",         "Device name (max 31 chars)");
+    io1wpair_args.type         = arg_int0(NULL, NULL, "<type>",         "Device type (default 0=all; 2=ROLLER_SHUTTER 3=AWNING 10=BLIND)");
+    io1wpair_args.manufacturer = arg_int0(NULL, NULL, "<manufacturer>", "Manufacturer (default 2=SOMFY; 1=VELUX)");
+    io1wpair_args.end          = arg_end(4);
+    const esp_console_cmd_t cmd = {
+        .command = "io_1w_pair",
+        .help    = "Pair a 1W (simplex) device. Device must be in pairing mode. Args: <name> [type] [manufacturer]",
+        .hint    = NULL,
+        .func    = &do_io1wpair_cmd,
+        .argtable = &io1wpair_args,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+// ******************* IO 1W UNPAIR ********************
+
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} io1wunpair_args;
+
+static int do_io1wunpair_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&io1wunpair_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, io1wunpair_args.end, argv[0]);
+        return 1;
+    }
+    bool ok = sIoRtsManager->Unpair1WDevice(io1wunpair_args.device_id->sval[0]);
+    ESP_LOGI(TAG, "io_1w_unpair %s: %s", io1wunpair_args.device_id->sval[0], ok ? "ok" : "failed / not a 1W device");
+    return 0;
+}
+
+static void register_io1wunpair(void)
+{
+    io1wunpair_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "Device ID (6 hex chars, e.g. A1B1C3)");
+    io1wunpair_args.end       = arg_end(2);
+    const esp_console_cmd_t cmd = {
+        .command = "io_1w_unpair",
+        .help    = "Unpair a 1W device and send REMOVE (0x39) frame",
+        .hint    = NULL,
+        .func    = &do_io1wunpair_cmd,
+        .argtable = &io1wunpair_args,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+// ******************* IO 1W SEND ********************
+
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_str *command;
+    struct arg_end *end;
+} io1wsend_args;
+
+static int do_io1wsend_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&io1wsend_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, io1wsend_args.end, argv[0]);
+        return 1;
+    }
+    const char *id  = io1wsend_args.device_id->sval[0];
+    const char *cmd = io1wsend_args.command->sval[0];
+    bool ok = false;
+    if (strcmp(cmd, "open") == 0)
+        ok = sIoRtsManager->OpenDevice(id);
+    else if (strcmp(cmd, "close") == 0)
+        ok = sIoRtsManager->CloseDevice(id);
+    else if (strcmp(cmd, "stop") == 0)
+        ok = sIoRtsManager->StopDevice(id);
+    else
+    {
+        char *endptr;
+        long pos = strtol(cmd, &endptr, 10);
+        if (*endptr == '\0' && pos >= 0 && pos <= 100)
+            ok = sIoRtsManager->SetDevicePosition(id, (uint8_t)pos);
+        else
+            ESP_LOGE(TAG, "Unknown command '%s'. Use: open / close / stop / 0-100", cmd);
+    }
+    ESP_LOGI(TAG, "io_1w_send %s %s: %s", id, cmd, ok ? "ok" : "failed");
+    return 0;
+}
+
+static void register_io1wsend(void)
+{
+    io1wsend_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "Device ID (6 hex chars)");
+    io1wsend_args.command   = arg_str1(NULL, NULL, "<cmd>",      "open / close / stop / 0-100");
+    io1wsend_args.end       = arg_end(3);
+    const esp_console_cmd_t cmd = {
+        .command = "io_1w_send",
+        .help    = "Send a 1W command: open / close / stop / position (0-100)",
+        .hint    = NULL,
+        .func    = &do_io1wsend_cmd,
+        .argtable = &io1wsend_args,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
 // ******************* IO Register commands ********************
 
 void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
@@ -1131,4 +1272,7 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_iolistdevices();
     register_ioconfig();
     register_iotilt();
+    register_io1wpair();
+    register_io1wunpair();
+    register_io1wsend();
 }
