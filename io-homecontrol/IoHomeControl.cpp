@@ -2075,7 +2075,7 @@ namespace iohome
   bool IoHomeControl::SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd)
   {
     uint8_t tries = 3;
-    bool setStartFlagToAuthentResponse = false;
+    bool setStartFlagToAuthentResponse = true;
 
     while (tries > 0)
     {
