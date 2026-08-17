@@ -112,9 +112,11 @@ namespace Helpers
     /// @brief Set SNTP configuration to network interface from configuration storage
     static void set_sntp_from_configuration()
     {
+        static std::string sntp_addr; // must outlive esp_sntp_init(); SNTP stores the raw pointer
+        sntp_addr = NetworkConfig::GetSNTPAddress();
         esp_sntp_stop(); // in case it's a reconnection!
         esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-        esp_sntp_setservername(0, NetworkConfig::GetSNTPAddress().c_str());
+        esp_sntp_setservername(0, sntp_addr.c_str());
         esp_sntp_init();
     }
 

@@ -146,7 +146,12 @@ namespace IoRts
                     storedDevice.device = it->second;
                     Helpers::StoredIoDevice existing;
                     if (Helpers::DeviceStorage::LoadIoDevice(deviceID, existing) == ESP_OK)
-                        storedDevice.linked_remotes = existing.linked_remotes;
+                    {
+                        storedDevice.linked_remotes  = existing.linked_remotes;
+                        storedDevice.transit_time_ms = existing.transit_time_ms;
+                        storedDevice.quiet           = existing.quiet;
+                        storedDevice.local_name      = existing.local_name;
+                    }
                     Helpers::DeviceStorage::SaveIoDevice(deviceID, storedDevice);
                 }
             }
@@ -275,7 +280,12 @@ namespace IoRts
         storedDevice.device = it->second;
         Helpers::StoredIoDevice existing;
         if (Helpers::DeviceStorage::LoadIoDevice(deviceID, existing) == ESP_OK)
-            storedDevice.linked_remotes = existing.linked_remotes;
+        {
+            storedDevice.linked_remotes  = existing.linked_remotes;
+            storedDevice.transit_time_ms = existing.transit_time_ms;
+            storedDevice.quiet           = existing.quiet;
+            storedDevice.local_name      = existing.local_name;
+        }
         Helpers::DeviceStorage::SaveIoDevice(deviceID, storedDevice);
         mIoDevicesMutex.unlock();
         if (sMqttHelper != nullptr)
@@ -314,7 +324,12 @@ namespace IoRts
         storedDevice.device = it->second;
         Helpers::StoredIoDevice existing;
         if (Helpers::DeviceStorage::LoadIoDevice(deviceID, existing) == ESP_OK)
-            storedDevice.linked_remotes = existing.linked_remotes;
+        {
+            storedDevice.linked_remotes  = existing.linked_remotes;
+            storedDevice.transit_time_ms = existing.transit_time_ms;
+            storedDevice.quiet           = existing.quiet;
+            storedDevice.local_name      = existing.local_name;
+        }
         Helpers::DeviceStorage::SaveIoDevice(deviceID, storedDevice);
         mIoDevicesMutex.unlock();
         // Re-link remotes in radio layer
