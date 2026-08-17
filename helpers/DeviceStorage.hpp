@@ -47,8 +47,9 @@ namespace Helpers
         /// @brief Remove a remote link from all stored IO devices
         static esp_err_t RemoveRemoteFromIoDevices(const std::string &remoteID);
 
-    private:
         static cJSON *DeviceToJson(const std::string &deviceID, const StoredIoDevice &storedDevice);
+
+    private:
         static bool   JsonToDevice(const cJSON *obj, std::string &deviceID, StoredIoDevice &storedDevice);
         static esp_err_t ReadAllDevices(std::map<std::string, StoredIoDevice> &devices);
         static esp_err_t WriteAllDevices(const std::map<std::string, StoredIoDevice> &devices);

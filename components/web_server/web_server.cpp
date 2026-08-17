@@ -2075,31 +2075,6 @@ static esp_err_t read_body_large(httpd_req_t *req, char **out)
 }
 
 // Helper: serialize a StoredIoDevice to a cJSON object (same fields as DeviceStorage)
-static cJSON *stored_device_to_json(const std::string &deviceID, const Helpers::StoredIoDevice &sd)
-{
-    const iohome::IoDevice &dev = sd.device;
-    cJSON *obj = cJSON_CreateObject();
-    cJSON_AddStringToObject(obj, "id", deviceID.c_str());
-    cJSON_AddStringToObject(obj, "name", dev.info.name);
-
-    std::string nodeIdHex;
-    for (int i = 0; i < iohome::NODE_ID_SIZE; i++)
-        nodeIdHex += std::format("{:02X}", dev.info.node_id[i]);
-    cJSON_AddStringToObject(obj, "node_id", nodeIdHex.c_str());
-
-    cJSON_AddNumberToObject(obj, "device_type",    (uint8_t)dev.info.device_type);
-    cJSON_AddNumberToObject(obj, "device_subtype", dev.info.device_subtype);
-    cJSON_AddNumberToObject(obj, "manufacturer",   (uint8_t)dev.info.manufacturer);
-    cJSON_AddStringToObject(obj, "info1", dev.info.info1);
-    cJSON_AddStringToObject(obj, "info2", dev.info.info2);
-    cJSON_AddBoolToObject(obj,   "open_close_inverted", dev.info.is_openclose_inverted);
-    cJSON_AddBoolToObject(obj,   "is_low_power",        dev.info.is_low_power);
-
-    cJSON *remotes = cJSON_AddArrayToObject(obj, "remotes");
-    for (const std::string &r : sd.linked_remotes)
-        cJSON_AddItemToArray(remotes, cJSON_CreateString(r.c_str()));
-    return obj;
-}
 
 // Helper: populate a StoredIoDevice from a cJSON object (same fields as DeviceStorage)
 static bool json_to_stored_device(cJSON *item, std::string &deviceID, Helpers::StoredIoDevice &sd)
@@ -2168,6 +2143,33 @@ static bool json_to_stored_device(cJSON *item, std::string &deviceID, Helpers::S
     cJSON *lpItem = cJSON_GetObjectItem(item, "is_low_power");
     dev.info.is_low_power = cJSON_IsBool(lpItem) ? cJSON_IsTrue(lpItem) : true;
 
+    cJSON *transitItem = cJSON_GetObjectItem(item, "transit_ms");
+    sd.transit_time_ms = cJSON_IsNumber(transitItem) ? (uint32_t)transitItem->valuedouble : 0;
+
+    cJSON *quietItem = cJSON_GetObjectItem(item, "quiet");
+    sd.quiet = cJSON_IsBool(quietItem) ? cJSON_IsTrue(quietItem) : false;
+
+    cJSON *localNameItem = cJSON_GetObjectItem(item, "local_name");
+    sd.local_name = (cJSON_IsString(localNameItem) && localNameItem->valuestring[0]) ? localNameItem->valuestring : "";
+    strncpy(dev.local_name, sd.local_name.c_str(), sizeof(dev.local_name) - 1);
+    dev.local_name[sizeof(dev.local_name) - 1] = '\0';
+
+    cJSON *protoItem = cJSON_GetObjectItem(item, "protocol");
+    if (cJSON_IsString(protoItem) && strcmp(protoItem->valuestring, "1w") == 0) {
+        dev.info.protocol_mode = iohome::ProtocolMode::PROTO_1W;
+        cJSON *seqItem = cJSON_GetObjectItem(item, "sequence");
+        if (cJSON_IsString(seqItem))
+            dev.info.sequence_1w = (uint16_t)strtoul(seqItem->valuestring, nullptr, 16);
+        cJSON *keyItem = cJSON_GetObjectItem(item, "key_1w");
+        if (cJSON_IsString(keyItem)) {
+            const char *ks = keyItem->valuestring;
+            for (int i = 0; i < iohome::AES_KEY_SIZE && ks[i * 2] && ks[i * 2 + 1]; i++) {
+                char byte[3] = {ks[i * 2], ks[i * 2 + 1], 0};
+                dev.info.key_1w[i] = (uint8_t)strtoul(byte, nullptr, 16);
+            }
+        }
+    }
+
     sd.linked_remotes.clear();
     cJSON *remotesArr = cJSON_GetObjectItem(item, "remotes");
     if (cJSON_IsArray(remotesArr)) {
@@ -2189,7 +2191,7 @@ static esp_err_t api_download_devices(httpd_req_t *req)
 
     cJSON *arr = cJSON_CreateArray();
     for (const auto &[deviceID, sd] : storedDevices)
-        cJSON_AddItemToArray(arr, stored_device_to_json(deviceID, sd));
+        cJSON_AddItemToArray(arr, Helpers::DeviceStorage::DeviceToJson(deviceID, sd));
 
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"devices.json\"");
     send_json(req, arr);
@@ -2459,7 +2461,7 @@ static esp_err_t api_backup_get(httpd_req_t *req)
     Helpers::DeviceStorage::LoadAllIoDevices(storedDevices);
     cJSON *devArr = cJSON_CreateArray();
     for (const auto &[deviceID, sd] : storedDevices)
-        cJSON_AddItemToArray(devArr, stored_device_to_json(deviceID, sd));
+        cJSON_AddItemToArray(devArr, Helpers::DeviceStorage::DeviceToJson(deviceID, sd));
     cJSON_AddItemToObject(root, "devices", devArr);
 
     cJSON *creds = cJSON_CreateObject();
