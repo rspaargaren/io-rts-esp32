@@ -554,7 +554,8 @@ static esp_err_t api_action_post(httpd_req_t *req)
     auto arm_move = [&](float target_pos) {
         s_manager->mIoDevicesMutex.lock();
         auto it = s_manager->mIoDevices.find(deviceId);
-        if (it != s_manager->mIoDevices.end() && std::abs(it->second.position - target_pos) > 1.0f) {
+        if (it != s_manager->mIoDevices.end() && std::abs(it->second.position - target_pos) > 1.0f
+            && it->second.position != iohome::UNKNOWN_POSITION) {
             it->second.move_start_us   = esp_timer_get_time();
             it->second.move_start_pos  = it->second.position;
             it->second.move_target_pos = target_pos;

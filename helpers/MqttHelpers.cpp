@@ -481,7 +481,7 @@ namespace Helpers
                                         if (it != mgr->mIoDevices.end())
                                             quiet = it->second.quiet;
                                     }
-                                    mgr->mIoHome->CloseDevice(deviceID, quiet);
+                                    mgr->CloseDevice(deviceID, quiet);
                                 }
                                 else if (command.compare("OPEN") == 0)
                                 {
@@ -492,11 +492,11 @@ namespace Helpers
                                         if (it != mgr->mIoDevices.end())
                                             quiet = it->second.quiet;
                                     }
-                                    mgr->mIoHome->OpenDevice(deviceID, quiet);
+                                    mgr->OpenDevice(deviceID, quiet);
                                 }
                                 else if (command.compare("STOP") == 0)
                                 {
-                                    mgr->mIoHome->StopDevice(deviceID);
+                                    mgr->StopDevice(deviceID);
                                 }
                                 else if (command.compare("ON") == 0)
                                 {
@@ -524,7 +524,7 @@ namespace Helpers
                                 float position = strtof(command.c_str(), NULL);
                                 if (position >= (float)0.0 && position <= (float)100.0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->SetDevicePosition(deviceID, position);
+                                    mqttHelper->GetIoRtsManager()->SetDevicePosition(deviceID, (uint8_t)position);
                                 }
                                 else
                                     ESP_LOGE(TAG, "Received command %s for device %s -> invalid position!", command.c_str(), deviceID.c_str());
