@@ -1072,6 +1072,8 @@ namespace Helpers
 
             // "cmps" section — device components
             cJSON *cmps = NULL;
+            std::string device_state_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_STATE_TOPIC;
+            std::string device_platform;
             if (!error)
             {
                 cmps = cJSON_AddObjectToObject(discovery, "cmps");
@@ -1083,7 +1085,6 @@ namespace Helpers
             {
                 std::string device_id_fav = MQTT_CLIENT_PREFIX_IO + it->first + MQTT_CLIENT_SUFFIX_FAV_IO;
                 std::string device_cmd_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_TOPIC;
-                std::string device_state_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_STATE_TOPIC;
                 std::string device_position_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_POSITION_TOPIC;
                 std::string device_cmd_position_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_POSITION_TOPIC;
                 std::string device_tilt_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_TILT_TOPIC;
@@ -1091,7 +1092,6 @@ namespace Helpers
                 std::string device_cmd_fav_pos_topic = GetTopicPrefix() + "/" + device_id + MQTT_CLIENT_COMMAND_FAV_POS_TOPIC;
                 std::string device_manage_cmd_topic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + it->first + MQTT_CLIENT_SUFFIX_MANAGE + MQTT_CLIENT_COMMAND_TOPIC;
                 std::string device_remotes_state_topic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + it->first + MQTT_CLIENT_SUFFIX_REMOTES + MQTT_CLIENT_STATE_TOPIC;
-                std::string device_platform;
 
                 cJSON *cmp = cJSON_AddObjectToObject(cmps, device_id.c_str());
                 if (cmp == NULL)
@@ -1359,6 +1359,9 @@ namespace Helpers
                     cJSON_free((void *)data);
                     ESP_LOGD(TAG, "Sent IO device discovery for %s", it->first.c_str());
                 }
+                // Clear stale retained state for cover devices with unknown position so HA shows "unknown" rather than a stale "open".
+                if (device_platform == "cover" && it->second.position == UNKNOWN_POSITION)
+                    esp_mqtt_client_publish(mMqttClientHandle, device_state_topic.c_str(), NULL, 0, 0, 1);
             }
             cJSON_Delete(discovery);
         }
@@ -1463,10 +1466,8 @@ namespace Helpers
             }
             else
             {
-                data = "None";
-                esp_mqtt_client_publish(mMqttClientHandle, positionTopic.c_str(), data.c_str(), 0, 0, 1);
-                data = "open";
-                esp_mqtt_client_publish(mMqttClientHandle, stateTopic.c_str(), data.c_str(), 0, 0, 1);
+                // Skip state topic — publishing "open" by default causes stale retained state in HA for 1W devices that never report position.
+                esp_mqtt_client_publish(mMqttClientHandle, positionTopic.c_str(), "None", 0, 0, 1);
             }
             break;
         case DeviceType::LIGHT:
