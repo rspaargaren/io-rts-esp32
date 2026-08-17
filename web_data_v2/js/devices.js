@@ -634,6 +634,11 @@ window.MiOpenApi.postJson("/api/action", { deviceId: device.id, action: "identif
 body.appendChild(devRow(app.i18nText("button.identify", "Identify"), app.i18nText("popup.device_identify_desc", "Triggers a brief movement to locate the device."), idBtn));
 }
 }
+if (device.protocol !== "1w" && device.info1_serial && device.info1_serial.node_id) {
+var s = device.info1_serial;
+var serialText = s.node_id + " · OEM " + s.oem_id + " · " + (s.year ? "20" + s.year : "—");
+body.appendChild(devRow("Serial", serialText, null));
+}
 var danger = document.createElement("div");
 danger.className = "dev-danger-zone";
 var dangerLbl = document.createElement("div");
