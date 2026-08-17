@@ -469,6 +469,21 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddStringToObject(obj, "protocol", is1w ? "1w" : "2w");
         cJSON_AddBoolToObject(obj, "position_estimated", is1w);
 
+        // Raw hex dumps of info1/info2 for diagnostics — lets users inspect the
+        // exact bytes the device returned without charset interpretation issues.
+        if (!is1w) {
+            auto to_hex = [](const char *buf, size_t maxlen) {
+                std::string h;
+                for (size_t i = 0; i < maxlen && buf[i] != '\0'; i++)
+                    h += std::format("{:02X}", (uint8_t)buf[i]);
+                return h;
+            };
+            cJSON_AddStringToObject(obj, "info1_hex",
+                to_hex(dev.info.info1, iohome::CMD_PARAM_INFO1_MAXSIZE).c_str());
+            cJSON_AddStringToObject(obj, "info2_hex",
+                to_hex(dev.info.info2, iohome::CMD_PARAM_INFO2_MAXSIZE).c_str());
+        }
+
         cJSON_AddItemToArray(arr, obj);
     }
     s_manager->mIoDevicesMutex.unlock();
