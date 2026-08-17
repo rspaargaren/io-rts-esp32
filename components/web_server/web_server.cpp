@@ -635,7 +635,10 @@ static esp_err_t api_action_post(httpd_req_t *req)
             cJSON_Delete(json);
             return ESP_OK;
         }
-        ok = s_manager->mIoHome->SetDeviceName(deviceId, newName);
+        for (int _try = 0; _try < 3 && !ok; _try++) {
+            if (_try > 0) vTaskDelay(pdMS_TO_TICKS(1000));
+            ok = s_manager->mIoHome->SetDeviceName(deviceId, newName);
+        }
         if (!ok) {
             send_result(req, false, "Failed to write name to device — communication error");
             cJSON_Delete(json);
@@ -964,9 +967,15 @@ static void ota_key_init(void)
 
 static bool ota_check_key(httpd_req_t *req)
 {
+    // Try X-OTA-Key header first; fall back to ?_key= query param for proxies that strip custom headers
     char key_hdr[OTA_KEY_LEN + 1] = {};
     esp_err_t err = httpd_req_get_hdr_value_str(req, "X-OTA-Key", key_hdr, sizeof(key_hdr));
-    uint8_t diff = (err != ESP_OK) ? 1 : 0;
+    if (err != ESP_OK) {
+        char url_buf[256] = {};
+        if (httpd_req_get_url_query_str(req, url_buf, sizeof(url_buf)) == ESP_OK)
+            httpd_query_key_value(url_buf, "_key", key_hdr, sizeof(key_hdr));
+    }
+    uint8_t diff = (key_hdr[0] == '\0') ? 1 : 0;
     for (int i = 0; i < OTA_KEY_LEN; i++)
         diff |= (uint8_t)key_hdr[i] ^ (uint8_t)s_ota_key[i];
     bool ok = (diff == 0);

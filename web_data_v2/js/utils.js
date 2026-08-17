@@ -112,12 +112,18 @@ window.getLang = getLang;
         return response.json().catch(function () { return {}; });
     }
 
+    function keyedUrl(url) {
+        var key = window.MiOpenApi && window.MiOpenApi.otaKey;
+        if (!key) return url;
+        var sep = url.indexOf("?") === -1 ? "?" : "&";
+        return url + sep + "_key=" + encodeURIComponent(key);
+    }
+
     async function requestJson(url, options) {
         const requestOptions = options || {};
         const method = (requestOptions.method || "GET").toUpperCase();
-        const requestUrl = method === "GET"
-            ? url + (url.indexOf("?") === -1 ? "?" : "&") + "_=" + Date.now()
-            : url;
+        var requestUrl = keyedUrl(url);
+        if (method === "GET") requestUrl += (requestUrl.indexOf("?") === -1 ? "?" : "&") + "_=" + Date.now();
         if (method === "GET") requestOptions.cache = "no-store";
         requestOptions.headers = otaHeaders(requestOptions.headers || {});
         const response = await fetch(requestUrl, requestOptions);
