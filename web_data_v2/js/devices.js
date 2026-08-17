@@ -636,8 +636,10 @@ body.appendChild(devRow(app.i18nText("button.identify", "Identify"), app.i18nTex
 }
 if (device.protocol !== "1w" && device.info1_serial && device.info1_serial.node_id) {
 var s = device.info1_serial;
-var serialText = s.node_id + " · OEM " + s.oem_id + " · " + (s.year ? "20" + s.year : "—");
-body.appendChild(devRow("Serial", serialText, null));
+var serialSpan = document.createElement("span");
+serialSpan.style.cssText = "font-size:13px;color:var(--text2);font-family:monospace;";
+serialSpan.textContent = s.node_id + " · OEM " + s.oem_id + " · " + (s.year ? "20" + s.year : "—");
+body.appendChild(devRow("Serial", null, serialSpan));
 }
 var danger = document.createElement("div");
 danger.className = "dev-danger-zone";
