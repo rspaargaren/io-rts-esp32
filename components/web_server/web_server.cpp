@@ -469,8 +469,8 @@ static esp_err_t api_devices_get(httpd_req_t *req)
         cJSON_AddStringToObject(obj, "protocol", is1w ? "1w" : "2w");
         cJSON_AddBoolToObject(obj, "position_estimated", is1w);
 
-        // Raw hex dumps of info1/info2 for diagnostics — lets users inspect the
-        // exact bytes the device returned without charset interpretation issues.
+        // Raw hex dumps + decoded serial fields for 2W devices.
+        // Serial format (Velocet spec): NodeID(6 ASCII) + OemID(2 ASCII) + Year(2 ASCII) + Week(2 binary)
         if (!is1w) {
             auto to_hex = [](const char *buf, size_t maxlen) {
                 std::string h;
@@ -482,6 +482,20 @@ static esp_err_t api_devices_get(httpd_req_t *req)
                 to_hex(dev.info.info1, iohome::CMD_PARAM_INFO1_MAXSIZE).c_str());
             cJSON_AddStringToObject(obj, "info2_hex",
                 to_hex(dev.info.info2, iohome::CMD_PARAM_INFO2_MAXSIZE).c_str());
+
+            // Decode serial: bytes 0-5=NodeID, 6-7=OemID, 8-9=Year, 10-11=Week
+            auto parse_serial = [](const char *buf) -> cJSON * {
+                cJSON *s = cJSON_CreateObject();
+                char tmp[7] = {};
+                memcpy(tmp, buf, 6);     cJSON_AddStringToObject(s, "node_id", tmp);
+                memcpy(tmp, buf + 6, 2); tmp[2] = '\0'; cJSON_AddStringToObject(s, "oem_id", tmp);
+                memcpy(tmp, buf + 8, 2); tmp[2] = '\0'; cJSON_AddStringToObject(s, "year", tmp);
+                cJSON_AddStringToObject(s, "week",
+                    std::format("{:02X}{:02X}", (uint8_t)buf[10], (uint8_t)buf[11]).c_str());
+                return s;
+            };
+            cJSON_AddItemToObject(obj, "info1_serial", parse_serial(dev.info.info1));
+            cJSON_AddItemToObject(obj, "info2_serial", parse_serial(dev.info.info2));
         }
 
         cJSON_AddItemToArray(arr, obj);
