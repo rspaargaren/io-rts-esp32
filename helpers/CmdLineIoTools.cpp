@@ -2,6 +2,7 @@
 #include "IoHomeConfig.hpp"
 
 #include <algorithm>
+#include <format>
 #include <vector>
 #include "argtable3/argtable3.h"
 #include "esp_console.h"
@@ -860,6 +861,64 @@ void register_iogetbattery(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
 
+// ******************* IO GET INFO ********************
+
+static struct
+{
+    struct arg_str *device_id;
+    struct arg_end *end;
+} iogetinfo_args;
+
+static int do_iogetinfo_cmd(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&iogetinfo_args);
+    if (nerrors != 0)
+    {
+        arg_print_errors(stderr, iogetinfo_args.end, argv[0]);
+        return 1;
+    }
+    const std::string deviceID = iogetinfo_args.device_id->sval[0];
+    sIoHome->DeviceGetGenericInfo(deviceID, iohome::CMD_GET_GENERAL_INFO1);
+    sIoHome->DeviceGetGenericInfo(deviceID, iohome::CMD_GET_GENERAL_INFO2);
+
+    std::lock_guard<std::mutex> guard(sIoRtsManager->mIoDevicesMutex);
+    auto it = sIoRtsManager->mIoDevices.find(deviceID);
+    if (it == sIoRtsManager->mIoDevices.end())
+    {
+        ESP_LOGE(TAG, "Device %s not found", deviceID.c_str());
+        return 1;
+    }
+    const auto &info = it->second.info;
+    auto to_hex = [](const char *buf, size_t maxlen) {
+        std::string h;
+        for (size_t i = 0; i < maxlen && buf[i] != '\0'; i++)
+            h += std::format("{:02X}", (uint8_t)buf[i]);
+        return h;
+    };
+    std::string h1 = to_hex(info.info1, iohome::CMD_PARAM_INFO1_MAXSIZE);
+    std::string h2 = to_hex(info.info2, iohome::CMD_PARAM_INFO2_MAXSIZE);
+    ESP_LOGI(TAG, "Device %s info1 (0x54): %s", deviceID.c_str(), h1.empty() ? "(empty)" : h1.c_str());
+    ESP_LOGI(TAG, "Device %s info2 (0x56): %s", deviceID.c_str(), h2.empty() ? "(empty)" : h2.c_str());
+    return 0;
+}
+
+void register_iogetinfo(void)
+{
+    iogetinfo_args.device_id = arg_str1(NULL, NULL, "<deviceid>", "ID of the device, 3 bytes (eg 112233)");
+    iogetinfo_args.end = arg_end(1);
+
+    const esp_console_cmd_t cmd = {
+        .command = "io_getinfo",
+        .help = "Query and display info1 (CMD 0x54) and info2 (CMD 0x56) from an IO-HomeControl device as hex",
+        .hint = NULL,
+        .func = &do_iogetinfo_cmd,
+        .argtable = &iogetinfo_args,
+        .func_w_context = NULL,
+        .context = NULL};
+
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
 // ******************* IO LIST DEVICES ********************
 static int do_iolistdevices_cmd(int argc, char **argv)
 {
@@ -1269,6 +1328,7 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_ioinvertdevice();
     register_iosendraw();
     register_iogetbattery();
+    register_iogetinfo();
     register_iolistdevices();
     register_ioconfig();
     register_iotilt();

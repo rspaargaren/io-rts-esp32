@@ -277,6 +277,12 @@ namespace iohome
     /// @return true if at least one query succeeded
     bool DeviceGetBattery(const std::string &deviceID);
 
+    /// @brief Send a generic info request and store the result in the device struct
+    /// @param deviceID Device ID (6 hex chars, eg "112233")
+    /// @param requestID Command ID (eg CMD_GET_GENERAL_INFO1 = 0x54)
+    /// @return true on success, false on error
+    bool DeviceGetGenericInfo(const std::string &deviceID, uint8_t requestID);
+
     /// @brief Transmit a frame — enqueues to the FreeRTOS TX queue (thread-safe).
     /// @param frame IoFrame to transmit
     /// @param frequency Frequency in Hz
@@ -313,12 +319,6 @@ namespace iohome
     /// @brief Update internal device status from received frame and send to callback
     /// @param statusFrame Received status frame (can be CMD_PRIVATE_RESPONSE, CMD_PRIVATE2_RESPONSE or CMD_STATUS_UPDATE)
     void UpdateDeviceStatus(const IoFrame &statusFrame);
-
-    /// @brief Send a request and use UpdateDeviceStatus to handle the response
-    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
-    /// @param requestID ID of the request to send (GetInfo, GetName, GetStatus...)
-    /// @return true on success, false on error
-    bool DeviceGetGenericInfo(const std::string &deviceID, uint8_t requestID);
 
     /// @brief Get device name (0x50) - Fill name in IoDeviceInformation struct
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
