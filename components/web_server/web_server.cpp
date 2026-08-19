@@ -144,8 +144,15 @@ static void ws_send_job_fn(void *arg)
 {
     ws_send_job *job = static_cast<ws_send_job *>(arg);
 
-    // Guard against fd reuse: the fd may have been closed and reassigned to a
-    // new non-WS connection between queueing and execution.
+    // Guard 1: check our own table first. A previous queued job may have already
+    // marked this fd dead and removed it; if so, skip immediately without touching httpd.
+    bool tracked = false;
+    for (int i = 0; i < WS_MAX_CLIENTS; i++)
+        if (s_ws_fds[i] == job->fd) { tracked = true; break; }
+    if (!tracked) { free(job); return; }
+
+    // Guard 2: verify httpd still knows this fd as a WS session (catches fd reuse where
+    // the OS recycled the fd for a new non-WS connection after our table was populated).
     if (httpd_ws_get_fd_info(s_server, job->fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
         for (int i = 0; i < WS_MAX_CLIENTS; i++)
             if (s_ws_fds[i] == job->fd) { s_ws_fds[i] = -1; break; }
