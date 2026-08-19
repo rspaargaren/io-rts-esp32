@@ -759,6 +759,28 @@ namespace IoRts
         return mIoHome->StopDevice(deviceID);
     }
 
+    void IoRtsManager::StartMoveTracking(const std::string &deviceID, float target_pos)
+    {
+        std::lock_guard<std::mutex> guard(mIoDevicesMutex);
+        auto it = mIoDevices.find(deviceID);
+        if (it == mIoDevices.end()) return;
+        float cur = it->second.position;
+        if (cur == iohome::UNKNOWN_POSITION)
+            cur = (target_pos <= 50.0f) ? 100.0f : 0.0f;
+        if (std::abs(cur - target_pos) > 1.0f) {
+            it->second.move_start_us   = esp_timer_get_time();
+            it->second.move_start_pos  = cur;
+            it->second.move_target_pos = target_pos;
+        }
+    }
+
+    void IoRtsManager::StopMoveTracking(const std::string &deviceID)
+    {
+        std::lock_guard<std::mutex> guard(mIoDevicesMutex);
+        auto it = mIoDevices.find(deviceID);
+        if (it != mIoDevices.end()) it->second.move_start_us = 0;
+    }
+
     void IoRtsManager::SaveDevice1WSequence(const std::string &deviceID)
     {
         // Read-modify-write: load the full StoredIoDevice from flash to preserve

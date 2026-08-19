@@ -475,28 +475,37 @@ namespace Helpers
                                 if (command.compare("CLOSE") == 0)
                                 {
                                     bool quiet = false;
+                                    bool inverted = false;
                                     {
                                         std::lock_guard<std::mutex> guard(mgr->mIoDevicesMutex);
                                         auto it = mgr->mIoDevices.find(deviceID);
-                                        if (it != mgr->mIoDevices.end())
-                                            quiet = it->second.quiet;
+                                        if (it != mgr->mIoDevices.end()) {
+                                            quiet    = it->second.quiet;
+                                            inverted = it->second.info.is_openclose_inverted;
+                                        }
                                     }
                                     mgr->CloseDevice(deviceID, quiet);
+                                    mgr->StartMoveTracking(deviceID, inverted ? 0.0f : 100.0f);
                                 }
                                 else if (command.compare("OPEN") == 0)
                                 {
                                     bool quiet = false;
+                                    bool inverted = false;
                                     {
                                         std::lock_guard<std::mutex> guard(mgr->mIoDevicesMutex);
                                         auto it = mgr->mIoDevices.find(deviceID);
-                                        if (it != mgr->mIoDevices.end())
-                                            quiet = it->second.quiet;
+                                        if (it != mgr->mIoDevices.end()) {
+                                            quiet    = it->second.quiet;
+                                            inverted = it->second.info.is_openclose_inverted;
+                                        }
                                     }
                                     mgr->OpenDevice(deviceID, quiet);
+                                    mgr->StartMoveTracking(deviceID, inverted ? 100.0f : 0.0f);
                                 }
                                 else if (command.compare("STOP") == 0)
                                 {
                                     mgr->StopDevice(deviceID);
+                                    mgr->StopMoveTracking(deviceID);
                                 }
                                 else if (command.compare("ON") == 0)
                                 {
@@ -524,7 +533,9 @@ namespace Helpers
                                 float position = strtof(command.c_str(), NULL);
                                 if (position >= (float)0.0 && position <= (float)100.0)
                                 {
-                                    mqttHelper->GetIoRtsManager()->SetDevicePosition(deviceID, (uint8_t)position);
+                                    auto *m = mqttHelper->GetIoRtsManager();
+                                    m->SetDevicePosition(deviceID, (uint8_t)position);
+                                    m->StartMoveTracking(deviceID, position);
                                 }
                                 else
                                     ESP_LOGE(TAG, "Received command %s for device %s -> invalid position!", command.c_str(), deviceID.c_str());

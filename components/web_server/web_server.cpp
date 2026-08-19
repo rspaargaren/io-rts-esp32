@@ -598,14 +598,9 @@ static esp_err_t api_action_post(httpd_req_t *req)
     bool ok = false;
 
     auto arm_move = [&](float target_pos) {
+        s_manager->StartMoveTracking(deviceId, target_pos);
         s_manager->mIoDevicesMutex.lock();
         auto it = s_manager->mIoDevices.find(deviceId);
-        if (it != s_manager->mIoDevices.end() && std::abs(it->second.position - target_pos) > 1.0f
-            && it->second.position != iohome::UNKNOWN_POSITION) {
-            it->second.move_start_us   = esp_timer_get_time();
-            it->second.move_start_pos  = it->second.position;
-            it->second.move_target_pos = target_pos;
-        }
         float dist = (it != s_manager->mIoDevices.end()) ? std::abs(it->second.move_target_pos - it->second.move_start_pos) / 100.0f : 1.0f;
         uint32_t tt = (it != s_manager->mIoDevices.end()) ? it->second.transit_time_ms : 0;
         bool is_2w = (it != s_manager->mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_2W);
@@ -632,10 +627,10 @@ static esp_err_t api_action_post(httpd_req_t *req)
     } else if (strcmp(action, "stop") == 0) {
         ok = s_manager->StopDevice(deviceId);
         if (ok) {
+            s_manager->StopMoveTracking(deviceId);
             s_manager->mIoDevicesMutex.lock();
             auto it = s_manager->mIoDevices.find(deviceId);
             bool is_2w = (it != s_manager->mIoDevices.end() && it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_2W);
-            if (it != s_manager->mIoDevices.end()) it->second.move_start_us = 0;
             s_manager->mIoDevicesMutex.unlock();
             if (is_2w) s_manager->ScheduleConfirmationPoll(deviceId, 0, 0.0f);
         }

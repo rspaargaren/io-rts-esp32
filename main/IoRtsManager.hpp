@@ -94,6 +94,11 @@ namespace IoRts
         bool SetDevicePosition(const std::string &deviceID, uint8_t position, bool quiet = false);
         /// @brief Send stop command — routes to 2W or 1W (1W sends current estimated position)
         bool StopDevice(const std::string &deviceID);
+        /// @brief Start position interpolation toward target_pos (for 1W devices that can't report back).
+        /// When current position is unknown, assumes worst-case starting position based on direction.
+        void StartMoveTracking(const std::string &deviceID, float target_pos);
+        /// @brief Cancel position interpolation (e.g. after STOP command).
+        void StopMoveTracking(const std::string &deviceID);
 
         /// @brief Pair a new 1W device. Device must be in pairing mode. Returns new device ID or empty on failure.
         std::string Pair1WDevice(const std::string &name, iohome::DeviceType type, iohome::Manufacturer manufacturer);
