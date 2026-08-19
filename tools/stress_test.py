@@ -115,6 +115,22 @@ async def get_ota_key(session: aiohttp.ClientSession) -> str:
         return data["key"]
 
 
+async def wait_for_device(session: aiohttp.ClientSession, timeout_s: float = 60.0) -> bool:
+    """Poll /api/info until the device responds or timeout_s elapses. Returns True if up."""
+    deadline = time.monotonic() + timeout_s
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            async with session.get(f"{BASE_URL}/api/info", timeout=aiohttp.ClientTimeout(total=3)) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+    return False
+
+
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 async def http_action(
@@ -264,6 +280,48 @@ async def ws_client_task(
 # Scenarios
 # ══════════════════════════════════════════════════════════════════════════════
 
+async def _ws_cycling_client(
+    stats: Stats,
+    duration: float,
+    client_id: int,
+    event_q: asyncio.Queue,
+    hold_min: float = 4.0,
+    hold_max: float = 8.0,
+):
+    """
+    Connects, holds for a random interval, then disconnects and reconnects.
+    Creates the fd-churn that triggers the fd-reuse/ESP_ERR_INVALID_ARG bug.
+    """
+    import random
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        hold = random.uniform(hold_min, hold_max)
+        try:
+            async with websockets.connect(WS_URL, open_timeout=5, close_timeout=3) as ws:
+                stats.ws_connects += 1
+                log(C, f"WS-{client_id}", f"connected (hold {hold:.1f}s)")
+                try:
+                    end = time.monotonic() + hold
+                    while time.monotonic() < min(end, deadline):
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                            msg = json.loads(raw)
+                            if msg.get("type") not in ("ping", "init"):
+                                log(C, f"WS-{client_id}", f"← {raw[:100]}")
+                                await event_q.put({"src": "ws", "client": client_id, "msg": msg, "ts": time.time()})
+                        except asyncio.TimeoutError:
+                            pass
+                except websockets.ConnectionClosed:
+                    stats.ws_disconnects += 1
+                    log(Y, f"WS-{client_id}", "closed by server")
+            # intentional disconnect — small gap before reconnect
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            stats.ws_errors += 1
+            log(R, f"WS-{client_id}", f"error: {e}")
+            await asyncio.sleep(1.5)
+
+
 async def scenario_ws_storm(
     session: aiohttp.ClientSession,
     bridge: MqttBridge,
@@ -271,17 +329,20 @@ async def scenario_ws_storm(
     duration: float,
 ) -> Stats:
     """
-    8 simultaneous WebSocket clients (simulating 8 open browser tabs) with
-    interleaved HTTP and MQTT commands. Targets the fd-reuse/WS send-job bug:
-    ESP_ERR_INVALID_ARG when a disconnected fd is reused and a queued send fires.
+    4 WebSocket clients (device limit) cycling with random hold times to create
+    fd-reuse churn. Commands flow in from MQTT and HTTP while clients connect and
+    disconnect. Targets ESP_ERR_INVALID_ARG in ws_send_job_fn when a recycled fd
+    gets a queued send from the previous connection's job queue.
     """
     stats = Stats("ws_storm")
     event_q: asyncio.Queue = asyncio.Queue()
-    log(Y, "ws_storm", f"Starting — {duration}s, 8 WS clients + commands every 3s")
+    log(Y, "ws_storm", f"Starting — {duration}s, 4 cycling WS clients (device limit) + commands every 3s")
 
+    # 4 clients = exactly WS_MAX_CLIENTS, so the device is always at capacity
+    # Random hold times mean fds are recycled frequently
     ws_tasks = [
-        asyncio.create_task(ws_client_task(stats, duration, i, event_q))
-        for i in range(8)
+        asyncio.create_task(_ws_cycling_client(stats, duration, i, event_q, hold_min=3.0, hold_max=7.0))
+        for i in range(4)
     ]
 
     await asyncio.sleep(2)  # let WS clients establish
@@ -629,7 +690,14 @@ async def main(chosen: list[str], duration_override: Optional[int]):
 
             all_stats.append(stats)
             log(G, "DONE", f"{name}: {stats.summary()}")
-            await asyncio.sleep(3)
+
+            if chosen.index(name) < len(chosen) - 1:
+                log(Y, "recovery", "Waiting for device to recover before next scenario…")
+                if await wait_for_device(session, timeout_s=60.0):
+                    log(G, "recovery", "Device up — continuing")
+                    await asyncio.sleep(3)
+                else:
+                    log(R, "recovery", "Device did not recover within 60s — stopping test suite")
 
     bridge.stop()
 
