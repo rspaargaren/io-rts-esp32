@@ -39,7 +39,8 @@ MQTT_HOST   = "192.168.178.150"
 MQTT_PORT   = 1883
 MQTT_USER   = "somfymqtt"
 MQTT_PASS   = "Fsn74@msq26"
-MQTT_PREFIX = "io-rts"
+MQTT_PREFIX        = "io-rts"
+MQTT_DEVICE_PREFIX = "io_"   # device topics use io-rts/io_<ID>/set etc.
 
 TEST_DEVICES = {
     "5DA31C": "Screen_Gijs (2W)",
@@ -171,8 +172,8 @@ class MqttBridge:
         if rc == 0:
             log(G, "MQTT", "Connected to broker")
             for dev_id in TEST_DEVICES:
-                client.subscribe(f"{MQTT_PREFIX}/{dev_id}/state")
-                client.subscribe(f"{MQTT_PREFIX}/{dev_id}/position")
+                client.subscribe(f"{MQTT_PREFIX}/{MQTT_DEVICE_PREFIX}{dev_id}/state")
+                client.subscribe(f"{MQTT_PREFIX}/{MQTT_DEVICE_PREFIX}{dev_id}/position")
         else:
             log(R, "MQTT", f"Broker connect failed rc={rc}")
 
@@ -200,11 +201,11 @@ class MqttBridge:
 
     def publish(self, device_id: str, command: str):
         _guard(device_id)
-        self._client.publish(f"{MQTT_PREFIX}/{device_id}/set", command, qos=0)
+        self._client.publish(f"{MQTT_PREFIX}/{MQTT_DEVICE_PREFIX}{device_id}/set", command, qos=0)
 
     def publish_position(self, device_id: str, position: int):
         _guard(device_id)
-        self._client.publish(f"{MQTT_PREFIX}/{device_id}/set_position", str(position), qos=0)
+        self._client.publish(f"{MQTT_PREFIX}/{MQTT_DEVICE_PREFIX}{device_id}/set_position", str(position), qos=0)
 
     def drain_sync(self):
         """Discard any queued messages (call before a scenario to avoid stale data)."""
@@ -309,7 +310,7 @@ async def scenario_ws_storm(
             # MQTT path — simulates HA
             bridge.publish(dev_id, action.upper())
             stats.mqtt_sent += 1
-            log(B, "MQTT→dev", f"{MQTT_PREFIX}/{dev_id}/set = {action.upper()}")
+            log(B, "MQTT→dev", f"{MQTT_PREFIX}/{MQTT_DEVICE_PREFIX}{dev_id}/set = {action.upper()}")
 
         await asyncio.sleep(3)
 
@@ -341,7 +342,7 @@ async def scenario_mqtt_rapid(
                 break
             topic = ev["topic"]
             for dev_id in TEST_DEVICES:
-                if f"/{dev_id}/" in topic:
+                if f"/{MQTT_DEVICE_PREFIX}{dev_id}/" in topic:
                     stats.mqtt_state_rx += 1
                     if dev_id in pending:
                         lat_ms = (ev["ts"] - pending.pop(dev_id)) * 1000
@@ -360,10 +361,11 @@ async def scenario_mqtt_rapid(
         cmd    = cmds[(ci // len(devices)) % len(cmds)]
         ci += 1
 
-        pending[dev_id] = time.time()
+        if cmd != "STOP":
+            pending[dev_id] = time.time()
         bridge.publish(dev_id, cmd)
         stats.mqtt_sent += 1
-        log(B, "MQTT→dev", f"{MQTT_PREFIX}/{dev_id}/set = {cmd}")
+        log(B, "MQTT→dev", f"{MQTT_PREFIX}/{MQTT_DEVICE_PREFIX}{dev_id}/set = {cmd}")
 
         await drain_states(timeout=0.3)
         await asyncio.sleep(4)
@@ -407,7 +409,7 @@ async def scenario_position_track_1w(
             if ev:
                 topic   = ev["topic"]
                 payload = ev["payload"]
-                if f"/{dev_id}/position" in topic:
+                if f"/{MQTT_DEVICE_PREFIX}{dev_id}/position" in topic:
                     try:
                         pos = int(float(payload))
                     except ValueError:
@@ -420,7 +422,7 @@ async def scenario_position_track_1w(
                         stats.mqtt_state_rx += 1
                     else:
                         log(DIM, f"1W[{label}]", f"position={pos}% (unchanged)")
-                elif f"/{dev_id}/state" in topic:
+                elif f"/{MQTT_DEVICE_PREFIX}{dev_id}/state" in topic:
                     log(C, f"1W[{label}]", f"state={payload}")
                     stats.mqtt_state_rx += 1
 
@@ -432,12 +434,12 @@ async def scenario_position_track_1w(
 
     half = duration / 2
 
-    log(B, "MQTT→dev", f"{MQTT_PREFIX}/{dev_id}/set = OPEN")
+    log(B, "MQTT→dev", f"{MQTT_PREFIX}/{MQTT_DEVICE_PREFIX}{dev_id}/set = OPEN")
     bridge.publish(dev_id, "OPEN")
     stats.mqtt_sent += 1
     await watch("OPEN", half)
 
-    log(B, "MQTT→dev", f"{MQTT_PREFIX}/{dev_id}/set = CLOSE")
+    log(B, "MQTT→dev", f"{MQTT_PREFIX}/{MQTT_DEVICE_PREFIX}{dev_id}/set = CLOSE")
     bridge.publish(dev_id, "CLOSE")
     stats.mqtt_sent += 1
     await watch("CLOSE", half)
