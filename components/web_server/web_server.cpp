@@ -210,6 +210,17 @@ static esp_err_t ws_handler(httpd_req_t *req)
             if (s_ws_fds[i] == -1) { s_ws_fds[i] = fd; stored = true; break; }
         }
         if (!stored) {
+            // Evict any stale fds (clients that disconnected before the keepalive could clean them up)
+            for (int i = 0; i < WS_MAX_CLIENTS && !stored; i++) {
+                if (s_ws_fds[i] != -1 &&
+                    httpd_ws_get_fd_info(req->handle, s_ws_fds[i]) != HTTPD_WS_CLIENT_WEBSOCKET) {
+                    ESP_LOGW(TAG, "ws: evicting stale fd=%d slot=%d for new client fd=%d", s_ws_fds[i], i, fd);
+                    s_ws_fds[i] = fd;
+                    stored = true;
+                }
+            }
+        }
+        if (!stored) {
             ESP_LOGW(TAG, "ws: max clients reached, rejecting fd=%d", fd);
             if (fd >= 0) httpd_sess_trigger_close(req->handle, fd);
             return ESP_OK;
