@@ -143,6 +143,16 @@ struct ws_send_job {
 static void ws_send_job_fn(void *arg)
 {
     ws_send_job *job = static_cast<ws_send_job *>(arg);
+
+    // Guard against fd reuse: the fd may have been closed and reassigned to a
+    // new non-WS connection between queueing and execution.
+    if (httpd_ws_get_fd_info(s_server, job->fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
+        for (int i = 0; i < WS_MAX_CLIENTS; i++)
+            if (s_ws_fds[i] == job->fd) { s_ws_fds[i] = -1; break; }
+        free(job);
+        return;
+    }
+
     httpd_ws_frame_t frame = {};
     frame.type    = HTTPD_WS_TYPE_TEXT;
     frame.payload = (uint8_t *)job->buf;
