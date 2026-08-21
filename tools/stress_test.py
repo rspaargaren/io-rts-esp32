@@ -57,6 +57,7 @@ FORBIDDEN = {"33303C"}  # Luifel Tuin — NEVER touch, EVER
 
 HTTP_TIMEOUT = 15   # seconds — realistic for home use
 MQTT_STATE_TIMEOUT = 30  # seconds — time to wait for MQTT state update after command
+STOP_DELAY_MS = 600  # ms between movement command and stop — minimises physical screen travel
 
 # ── Console colours ───────────────────────────────────────────────────────────
 
@@ -211,6 +212,29 @@ async def http_action(
         ms = (time.monotonic() - t0) * 1000
         log_fail("HTTP→dev", f"{action.upper()} {device_id} — {e}")
         return False, ms
+
+
+async def http_action_then_stop(
+    session: aiohttp.ClientSession,
+    ota_key: str,
+    device_id: str,
+    action: str,
+    value: Optional[int] = None,
+) -> tuple[bool, float]:
+    """Send a movement action then STOP after STOP_DELAY_MS to minimise physical travel."""
+    ok, ms = await http_action(session, ota_key, device_id, action, value)
+    if action != "stop" and ok:
+        await asyncio.sleep(STOP_DELAY_MS / 1000)
+        await http_action(session, ota_key, device_id, "stop")
+    return ok, ms
+
+
+async def mqtt_publish_then_stop(bridge: "MqttBridge", device_id: str, cmd: str):
+    """Publish a movement command then STOP after STOP_DELAY_MS."""
+    bridge.publish(device_id, cmd)
+    if cmd.upper() != "STOP":
+        await asyncio.sleep(STOP_DELAY_MS / 1000)
+        bridge.publish(device_id, "STOP")
 
 
 async def http_get_devices(session: aiohttp.ClientSession) -> list:
@@ -378,7 +402,7 @@ async def scenario_daily_browser(
             break
         dev_id = devs[i % len(devs)]
         log_info("daily_browser", f"[{i+1}/{len(cmds)}] Sending {action.upper()} → {TEST_DEVICES[dev_id]}")
-        ok, ms = await http_action(session, ota_key, dev_id, action)
+        ok, ms = await http_action_then_stop(session, ota_key, dev_id, action)
         result.add(f"HTTP {action} {TEST_DEVICES[dev_id]}", ok, f"{ms:.0f} ms")
         if ok:
             result.record_latency(ms)
@@ -429,7 +453,7 @@ async def scenario_daily_ha(
         log_info("daily_ha", f"Sending {cmd} → {name}")
         entry = bridge.register_state_listener(dev_id)
         t0 = time.monotonic()
-        bridge.publish(dev_id, cmd)
+        await mqtt_publish_then_stop(bridge, dev_id, cmd)
         try:
             await asyncio.wait_for(entry["event"].wait(), timeout=MQTT_STATE_TIMEOUT)
             ms = (time.monotonic() - t0) * 1000
@@ -486,8 +510,8 @@ async def scenario_simultaneous(
         t0 = time.monotonic()
 
         # Fire both at the same moment
-        http_task  = asyncio.create_task(http_action(session, ota_key, http_dev, http_action_name))
-        bridge.publish(mqtt_dev, mqtt_cmd)
+        http_task  = asyncio.create_task(http_action_then_stop(session, ota_key, http_dev, http_action_name))
+        asyncio.create_task(mqtt_publish_then_stop(bridge, mqtt_dev, mqtt_cmd))
 
         http_ok, http_ms = await http_task
         result.add(f"HTTP {http_action_name} {TEST_DEVICES[http_dev]}", http_ok, f"{http_ms:.0f} ms")
@@ -586,8 +610,8 @@ async def scenario_position_push(
 
     reader = asyncio.create_task(_reader())
 
-    # Send open
-    ok, ms = await http_action(session, ota_key, "5DA31C", "open")
+    # Send open then stop — brief movement is enough to trigger position updates
+    ok, ms = await http_action_then_stop(session, ota_key, "5DA31C", "open")
     result.add("HTTP open Screen_Gijs", ok, f"{ms:.0f} ms")
 
     if ok:
