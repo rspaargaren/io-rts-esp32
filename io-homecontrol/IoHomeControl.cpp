@@ -848,11 +848,11 @@ namespace iohome
               ownNode      = (memcmp(it->second.info.node_id, mOwnNodeId, NODE_ID_SIZE) == 0);
               isDeleted    = it->second.is_deleted;
               bool is1w    = (it->second.info.protocol_mode == ProtocolMode::PROTO_1W);
-              needsName    = !ownNode && !isDeleted && !is1w && (strlen(it->second.info.name) <= 1);
-              needsType    = !ownNode && !isDeleted && !is1w && (it->second.info.device_type == DeviceType::UNKNOWN);
-              shouldUpdate = !ownNode && !isDeleted && !is1w &&
-                             ((esp_timer_get_time() > it->second.last_status_timestamp + STATUS_UPDATE_MAX_TIME_US) ||
-                              (it->second.next_status_update_timestamp < esp_timer_get_time()));
+              bool pollDue = (esp_timer_get_time() > it->second.last_status_timestamp + STATUS_UPDATE_MAX_TIME_US) ||
+                             (it->second.next_status_update_timestamp < esp_timer_get_time());
+              needsName    = !ownNode && !isDeleted && !is1w && pollDue && (strlen(it->second.info.name) <= 1);
+              needsType    = !ownNode && !isDeleted && !is1w && pollDue && (it->second.info.device_type == DeviceType::UNKNOWN);
+              shouldUpdate = !ownNode && !isDeleted && !is1w && pollDue;
             }
             xSemaphoreGive(sMutex);
           }
@@ -864,9 +864,34 @@ namespace iohome
           }
           if (!shouldUpdate && !needsName && !needsType) continue;
 
-          if (needsName) DeviceGetName(devId);
+          bool infoFailed = false;
+          if (needsName && !DeviceGetName(devId))        infoFailed = true;
           // DeviceGetGeneralInfo1 / DeviceGetGeneralInfo3 reserved for future use
-          if (needsType) DeviceGetGeneralInfo2(devId);
+          if (needsType && !DeviceGetGeneralInfo2(devId)) infoFailed = true;
+          if (infoFailed)
+          {
+            if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+            {
+              auto dev = sDeviceMap.find(devId);
+              if (dev != sDeviceMap.end())
+              {
+                if (dev->second.consecutive_poll_failures < 4)
+                  dev->second.consecutive_poll_failures++;
+                int64_t backoff;
+                switch (dev->second.consecutive_poll_failures)
+                {
+                  case 1:  backoff = STATUS_UPDATE_NEXT_TRY_US;  break;
+                  case 2:  backoff = STATUS_UPDATE_BACKOFF_2_US; break;
+                  case 3:  backoff = STATUS_UPDATE_BACKOFF_3_US; break;
+                  default: backoff = STATUS_UPDATE_MAX_TIME_US;  break;
+                }
+                dev->second.next_status_update_timestamp = esp_timer_get_time() + backoff;
+                IO_LOGW("UpdateDevicesStatusTask: {} info fetch failed (consecutive: {})",
+                        devId, dev->second.consecutive_poll_failures);
+              }
+              xSemaphoreGive(sMutex);
+            }
+          }
 
           if (shouldUpdate)
           {
