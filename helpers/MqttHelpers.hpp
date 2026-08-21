@@ -5,6 +5,10 @@
 #include "esp_err.h"
 #include "esp_timer.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+
 #include "IoRtsManager.hpp"
 #include "DeviceStorage.hpp"
 #include "mqtt_client.h"
@@ -20,9 +24,17 @@ namespace Helpers
     class MqttHelpers
     {
     public:
+        enum class MqttCmdType : uint8_t {
+            OPEN, CLOSE, STOP, ON, OFF, LOCK, UNLOCK, IDENTIFY,
+            POSITION, FAV_POS, TILT
+        };
+
         /// @brief Construct a new MqttHelpers object
         /// @param manager Pointer to IoRtsManager object
         MqttHelpers(IoRts::IoRtsManager *manager);
+
+        /// @brief Enqueue a device command for execution off the MQTT callback thread
+        void EnqueueCommand(const std::string &deviceId, MqttCmdType type, float value = 0.0f);
         /// @brief Start MQTT client
         /// @return ESP_OK if no error, ESP_ERR_NOT_ALLOWED if MQTT is not enabled in configuration or already started, ...
         esp_err_t StartMqttClient();
@@ -99,5 +111,8 @@ namespace Helpers
         esp_mqtt_client_handle_t mMqttClientHandle;  // Handle on MQTT client
         esp_timer_handle_t mReconnectTimer;          // One-shot timer for broker-drop reconnect
         bool mNetworkHandlersRegistered = false;     // True once network event handlers are registered
+        QueueHandle_t mCommandQueue = nullptr;       // Queue for device commands dispatched off the MQTT task
+        TaskHandle_t  mCommandTask  = nullptr;       // Worker task that drains mCommandQueue
+        static void   MqttCmdWorker(void *arg);      // Worker task entry point
     };
 }

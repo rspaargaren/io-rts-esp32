@@ -67,6 +67,13 @@ static const std::string MQTT_CLIENT_LOG_TOPIC = "/log"; // log topic
 
 static const char *TAG = "MQTTHelper";
 
+// Command packet sent through mCommandQueue — keeps the MQTT callback non-blocking.
+struct MqttCmd {
+    char    device_id[7]; // 6 hex chars + null terminator
+    Helpers::MqttHelpers::MqttCmdType type;
+    float   value;        // used for POSITION and TILT commands
+};
+
 namespace Helpers
 {
     static void mqtt_reconnect_timer_cb(void *arg)
@@ -469,107 +476,57 @@ namespace Helpers
                     else if (entity_id.starts_with(MQTT_CLIENT_PREFIX_IO))
                     {
                         if (mqttHelper->isIoHomePassive())
-                            break; // don't process IO devices commands if in passive mode
+                            break;
 
-                        // Parse and execute command on targeted IO device
                         const std::string deviceID = entity_id.substr(MQTT_CLIENT_PREFIX_IO.length());
                         const std::string command(event->data, event->data_len);
-                        if (deviceID.length() == NODE_ID_SIZE * 2)
+                        if (deviceID.length() != NODE_ID_SIZE * 2)
                         {
-                            // ESP_LOGI(TAG, "Received command %s for device %s", command.c_str(), deviceID.c_str());
-                            if (topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
-                            {
-                                auto *mgr = mqttHelper->GetIoRtsManager();
-                                if (command.compare("CLOSE") == 0)
-                                {
-                                    bool quiet = false;
-                                    bool inverted = false;
-                                    {
-                                        std::lock_guard<std::mutex> guard(mgr->mIoDevicesMutex);
-                                        auto it = mgr->mIoDevices.find(deviceID);
-                                        if (it != mgr->mIoDevices.end()) {
-                                            quiet    = it->second.quiet;
-                                            inverted = it->second.info.is_openclose_inverted;
-                                        }
-                                    }
-                                    mgr->CloseDevice(deviceID, quiet);
-                                    mgr->StartMoveTracking(deviceID, inverted ? 0.0f : 100.0f);
-                                }
-                                else if (command.compare("OPEN") == 0)
-                                {
-                                    bool quiet = false;
-                                    bool inverted = false;
-                                    {
-                                        std::lock_guard<std::mutex> guard(mgr->mIoDevicesMutex);
-                                        auto it = mgr->mIoDevices.find(deviceID);
-                                        if (it != mgr->mIoDevices.end()) {
-                                            quiet    = it->second.quiet;
-                                            inverted = it->second.info.is_openclose_inverted;
-                                        }
-                                    }
-                                    mgr->OpenDevice(deviceID, quiet);
-                                    mgr->StartMoveTracking(deviceID, inverted ? 100.0f : 0.0f);
-                                }
-                                else if (command.compare("STOP") == 0)
-                                {
-                                    mgr->StopDevice(deviceID);
-                                    mgr->StopMoveTracking(deviceID);
-                                }
-                                else if (command.compare("ON") == 0)
-                                {
-                                    mgr->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_ON_POSITION);
-                                }
-                                else if (command.compare("OFF") == 0)
-                                {
-                                    mgr->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_OFF_POSITION);
-                                }
-                                else if (command.compare("LOCK") == 0)
-                                {
-                                    mgr->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_OFF_POSITION);
-                                }
-                                else if (command.compare("UNLOCK") == 0)
-                                {
-                                    mgr->mIoHome->SetDevicePosition(deviceID, SWITCH_LIGHT_ON_POSITION);
-                                }
-                                else if (command.compare("IDENTIFY") == 0)
-                                {
-                                    mgr->mIoHome->IdentifyDevice(deviceID);
-                                }
-                            }
-                            else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_POSITION_TOPIC)) // it should be a position between 0 and 100
-                            {
-                                float position = strtof(command.c_str(), NULL);
-                                if (position >= (float)0.0 && position <= (float)100.0)
-                                {
-                                    auto *m = mqttHelper->GetIoRtsManager();
-                                    m->SetDevicePosition(deviceID, (uint8_t)position);
-                                    m->StartMoveTracking(deviceID, position);
-                                }
-                                else
-                                    ESP_LOGE(TAG, "Received command %s for device %s -> invalid position!", command.c_str(), deviceID.c_str());
-                            }
-                            else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_FAV_POS_TOPIC)) // favorite position button pressed
-                            {
-                                // ESP_LOGI(TAG, "Received 'set favorite position' for device %s", deviceID.c_str());
-                                mqttHelper->GetIoRtsManager()->mIoHome->SetDeviceToFavoritePosition(deviceID);
-                            }
-                            else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_TILT_TOPIC)) // it should be a tilt between 0 and 100
-                            {
-                                float tilt = strtof(command.c_str(), NULL);
-                                if (tilt >= (float)0.0 && tilt <= (float)100.0)
-                                {
-                                    mqttHelper->GetIoRtsManager()->mIoHome->SetDeviceTilt(deviceID, (uint8_t)tilt);
-                                }
-                                else
-                                    ESP_LOGE(TAG, "Received command %s for device %s -> invalid tilt!", command.c_str(), deviceID.c_str());
-                            }
-                            else
-                            {
-                                ESP_LOGE(TAG, "Received command %s for device %s -> invalid data!", command.c_str(), deviceID.c_str());
-                            }
+                            ESP_LOGE(TAG, "Received command %s for device %s -> invalid device ID length!", command.c_str(), deviceID.c_str());
+                            break;
+                        }
+
+                        // Parse command type — no RF calls here, just enqueue for the worker task.
+                        MqttHelpers::MqttCmdType type{};
+                        float value = 0.0f;
+                        bool valid = true;
+
+                        if (topic_str.ends_with(MQTT_CLIENT_COMMAND_TOPIC))
+                        {
+                            if      (command == "OPEN")     type = MqttHelpers::MqttCmdType::OPEN;
+                            else if (command == "CLOSE")    type = MqttHelpers::MqttCmdType::CLOSE;
+                            else if (command == "STOP")     type = MqttHelpers::MqttCmdType::STOP;
+                            else if (command == "ON")       type = MqttHelpers::MqttCmdType::ON;
+                            else if (command == "OFF")      type = MqttHelpers::MqttCmdType::OFF;
+                            else if (command == "LOCK")     type = MqttHelpers::MqttCmdType::LOCK;
+                            else if (command == "UNLOCK")   type = MqttHelpers::MqttCmdType::UNLOCK;
+                            else if (command == "IDENTIFY") type = MqttHelpers::MqttCmdType::IDENTIFY;
+                            else { ESP_LOGW(TAG, "Unrecognised command '%s' for %s", command.c_str(), deviceID.c_str()); valid = false; }
+                        }
+                        else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_POSITION_TOPIC))
+                        {
+                            value = strtof(command.c_str(), nullptr);
+                            if (value >= 0.0f && value <= 100.0f) type = MqttHelpers::MqttCmdType::POSITION;
+                            else { ESP_LOGE(TAG, "Invalid position '%s' for %s", command.c_str(), deviceID.c_str()); valid = false; }
+                        }
+                        else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_FAV_POS_TOPIC))
+                        {
+                            type = MqttHelpers::MqttCmdType::FAV_POS;
+                        }
+                        else if (topic_str.ends_with(MQTT_CLIENT_COMMAND_TILT_TOPIC))
+                        {
+                            value = strtof(command.c_str(), nullptr);
+                            if (value >= 0.0f && value <= 100.0f) type = MqttHelpers::MqttCmdType::TILT;
+                            else { ESP_LOGE(TAG, "Invalid tilt '%s' for %s", command.c_str(), deviceID.c_str()); valid = false; }
                         }
                         else
-                            ESP_LOGE(TAG, "Received command %s for device %s -> invalid device ID length!", command.c_str(), deviceID.c_str());
+                        {
+                            ESP_LOGE(TAG, "Received command %s for device %s -> invalid topic!", command.c_str(), deviceID.c_str());
+                            valid = false;
+                        }
+
+                        if (valid)
+                            mqttHelper->EnqueueCommand(deviceID, type, value);
                     }
                 }
             }
@@ -603,6 +560,87 @@ namespace Helpers
     bool MqttHelpers::isIoHomePassive()
     {
         return IoHomeConfig::isPassiveModeEnabled();
+    }
+
+    void MqttHelpers::EnqueueCommand(const std::string &deviceId, MqttCmdType type, float value)
+    {
+        MqttCmd cmd{};
+        strncpy(cmd.device_id, deviceId.c_str(), sizeof(cmd.device_id) - 1);
+        cmd.type  = type;
+        cmd.value = value;
+        if (xQueueSendToBack(mCommandQueue, &cmd, 0) != pdTRUE)
+            ESP_LOGW(TAG, "MQTT command queue full — dropping command for %s", deviceId.c_str());
+    }
+
+    void MqttHelpers::MqttCmdWorker(void *arg)
+    {
+        auto *self = static_cast<MqttHelpers *>(arg);
+        auto *mgr  = self->mIoRtsManager;
+        MqttCmd cmd;
+        while (true)
+        {
+            if (xQueueReceive(self->mCommandQueue, &cmd, portMAX_DELAY) != pdTRUE)
+                continue;
+            const std::string devId(cmd.device_id);
+            switch (cmd.type)
+            {
+                case MqttCmdType::OPEN:
+                {
+                    bool quiet = false, inverted = false;
+                    {
+                        std::lock_guard<std::mutex> g(mgr->mIoDevicesMutex);
+                        auto it = mgr->mIoDevices.find(devId);
+                        if (it != mgr->mIoDevices.end()) {
+                            quiet    = it->second.quiet;
+                            inverted = it->second.info.is_openclose_inverted;
+                        }
+                    }
+                    mgr->OpenDevice(devId, quiet);
+                    mgr->StartMoveTracking(devId, inverted ? 100.0f : 0.0f);
+                    break;
+                }
+                case MqttCmdType::CLOSE:
+                {
+                    bool quiet = false, inverted = false;
+                    {
+                        std::lock_guard<std::mutex> g(mgr->mIoDevicesMutex);
+                        auto it = mgr->mIoDevices.find(devId);
+                        if (it != mgr->mIoDevices.end()) {
+                            quiet    = it->second.quiet;
+                            inverted = it->second.info.is_openclose_inverted;
+                        }
+                    }
+                    mgr->CloseDevice(devId, quiet);
+                    mgr->StartMoveTracking(devId, inverted ? 0.0f : 100.0f);
+                    break;
+                }
+                case MqttCmdType::STOP:
+                    mgr->StopDevice(devId);
+                    mgr->StopMoveTracking(devId);
+                    break;
+                case MqttCmdType::ON:
+                case MqttCmdType::UNLOCK:
+                    mgr->mIoHome->SetDevicePosition(devId, SWITCH_LIGHT_ON_POSITION);
+                    break;
+                case MqttCmdType::OFF:
+                case MqttCmdType::LOCK:
+                    mgr->mIoHome->SetDevicePosition(devId, SWITCH_LIGHT_OFF_POSITION);
+                    break;
+                case MqttCmdType::IDENTIFY:
+                    mgr->mIoHome->IdentifyDevice(devId);
+                    break;
+                case MqttCmdType::POSITION:
+                    mgr->SetDevicePosition(devId, (uint8_t)cmd.value);
+                    mgr->StartMoveTracking(devId, cmd.value);
+                    break;
+                case MqttCmdType::FAV_POS:
+                    mgr->mIoHome->SetDeviceToFavoritePosition(devId);
+                    break;
+                case MqttCmdType::TILT:
+                    mgr->mIoHome->SetDeviceTilt(devId, (uint8_t)cmd.value);
+                    break;
+            }
+        }
     }
 
     MqttHelpers::MqttHelpers(IoRts::IoRtsManager *manager)
@@ -699,6 +737,13 @@ namespace Helpers
             esp_mqtt_client_destroy(mMqttClientHandle);
             mMqttClientHandle = nullptr;
             return ESP_FAIL;
+        }
+        // Create command queue and worker task once — they outlive client restarts.
+        if (mCommandQueue == nullptr)
+        {
+            mCommandQueue = xQueueCreate(8, sizeof(MqttCmd));
+            xTaskCreate(MqttCmdWorker, "mqtt_cmd", 4096, this, 5, &mCommandTask);
+            ESP_LOGI(TAG, "MQTT command worker task started");
         }
         mStarted = true;
         mMqttState = MqttState::CONNECTING;
