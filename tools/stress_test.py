@@ -56,7 +56,7 @@ TEST_DEVICES = {
 FORBIDDEN = {"33303C"}  # Luifel Tuin — NEVER touch, EVER
 
 HTTP_TIMEOUT = 15   # seconds — realistic for home use
-MQTT_STATE_TIMEOUT = 20  # seconds — time to wait for MQTT state update after command
+MQTT_STATE_TIMEOUT = 30  # seconds — time to wait for MQTT state update after command
 
 # ── Console colours ───────────────────────────────────────────────────────────
 

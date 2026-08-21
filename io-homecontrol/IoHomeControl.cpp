@@ -1589,7 +1589,10 @@ namespace iohome
       IO_LOGE("SetDevicePosition: This device ({}) doesn't support this command!", deviceID);
       return false;
     }
-    IO_LOGI("Setting position to {}%", position);
+    if (position == CMD_PARAM_POSITION_STOP)         IO_LOGI("Setting position to STOP (0xD2)");
+    else if (position == CMD_PARAM_POSITION_FAVORITE) IO_LOGI("Setting position to FAVORITE (0xD8)");
+    else if (position == CMD_PARAM_POSITION_UNKNOWN)  IO_LOGI("Setting position to UNKNOWN (0xD4)");
+    else                                              IO_LOGI("Setting position to {}%", position);
     if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
     {
       IoFrame request;
