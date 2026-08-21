@@ -893,7 +893,7 @@ namespace iohome
             }
           }
 
-          if (shouldUpdate)
+          if (shouldUpdate && !infoFailed)
           {
             if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
             {
