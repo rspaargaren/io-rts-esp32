@@ -2502,6 +2502,7 @@ namespace iohome
       else
       {
         IO_LOGE("DeviceGetGenericInfo: failed to send request or got no response!");
+        ret = false;
       }
       xSemaphoreGive(sMutex);
       return ret;
