@@ -135,7 +135,7 @@ namespace Helpers
             mqttHelper->SendDiscovery();
             // Publish inactive devices list so HA sensor and select are up to date
             mqttHelper->PublishInactiveDevicesList();
-            // Publish linked remotes sensor for each active device
+            // Publish linked remotes sensor for each active device — load storage once for all
             {
                 std::vector<std::string> activeIDs;
                 {
@@ -144,8 +144,16 @@ namespace Helpers
                         if (!dev.is_deleted)
                             activeIDs.push_back(id);
                 }
+                std::map<std::string, Helpers::StoredIoDevice> allStored;
+                Helpers::DeviceStorage::LoadAllIoDevices(allStored);
                 for (const std::string &id : activeIDs)
-                    mqttHelper->PublishDeviceRemotesList(id);
+                {
+                    auto it = allStored.find(id);
+                    if (it != allStored.end())
+                        mqttHelper->PublishDeviceRemotesList(id, it->second);
+                    else
+                        mqttHelper->PublishDeviceRemotesList(id);
+                }
             }
             // Re-publish current state of all active devices so HA is immediately up-to-date
             {
@@ -1581,14 +1589,19 @@ namespace Helpers
         if (!mStarted || mMqttClientHandle == nullptr)
             return;
         Helpers::StoredIoDevice stored;
-        std::string list;
         if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) == ESP_OK)
+            PublishDeviceRemotesList(deviceID, stored);
+    }
+
+    void MqttHelpers::PublishDeviceRemotesList(const std::string &deviceID, const Helpers::StoredIoDevice &stored)
+    {
+        if (!mStarted || mMqttClientHandle == nullptr)
+            return;
+        std::string list;
+        for (const std::string &remote : stored.linked_remotes)
         {
-            for (const std::string &remote : stored.linked_remotes)
-            {
-                if (!list.empty()) list += "; ";
-                list += remote;
-            }
+            if (!list.empty()) list += "; ";
+            list += remote;
         }
         if (list.empty()) list = "none";
         std::string topic = mTopicPrefix + "/" + MQTT_CLIENT_PREFIX_IO + deviceID + MQTT_CLIENT_SUFFIX_REMOTES + MQTT_CLIENT_STATE_TOPIC;

@@ -6,6 +6,7 @@
 #include "esp_timer.h"
 
 #include "IoRtsManager.hpp"
+#include "DeviceStorage.hpp"
 #include "mqtt_client.h"
 
 // forward declaration
@@ -60,6 +61,7 @@ namespace Helpers
         /// @brief Publish the linked remotes sensor state for a specific IO device
         /// @param deviceID IO device ID
         void PublishDeviceRemotesList(const std::string &deviceID);
+        void PublishDeviceRemotesList(const std::string &deviceID, const Helpers::StoredIoDevice &stored);
 
         /// @brief Called when network IP is obtained — triggers MQTT reconnect
         void OnNetworkConnected();
