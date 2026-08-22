@@ -54,16 +54,16 @@ upload_file() {
 }
 
 if [ $# -eq 0 ]; then
-  # No arguments — upload everything
-  # Small files first to avoid LittleFS fragmentation on large files
-  for f in \
-    js/popup.js js/ota.js js/remotes.js js/utils.js \
-    js/help.js js/updater.js js/app.js \
-    js/settings.js js/devices.js \
-    css/style.css \
-    index.html; do
-    upload_file "$f"
-  done
+  # No arguments — upload all files in web_data_v2/ automatically (no hardcoded list).
+  # JS and CSS upload as .gz (compressed). All other files upload as-is.
+  # Pre-existing .gz files for js/css are skipped — the *.js/css handler creates/uses them.
+  while IFS= read -r -d '' full; do
+    rel="${full#$DIR/}"
+    case "$rel" in
+      *.js.gz|*.css.gz) ;;  # skip — handled as part of *.js / *.css below
+      *) upload_file "$rel" ;;
+    esac
+  done < <(find "$DIR" -type f -print0 | sort -z)
 else
   for rel in "$@"; do
     upload_file "$rel"
