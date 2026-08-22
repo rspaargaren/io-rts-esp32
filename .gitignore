@@ -106,4 +106,4 @@ prompts/
 node_modules
 package-lock.json
 web_data_v2/version.json
-web_data_v2/**/*.gz
+# .gz files are pre-compressed assets committed to the repo for deployment
