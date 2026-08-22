@@ -616,7 +616,8 @@ namespace Helpers
                 }
                 case MqttCmdType::STOP:
                     mgr->StopDevice(devId);
-                    mgr->StopMoveTracking(devId);
+                    if (mgr->StopMoveTracking(devId))
+                        self->SendIoDeviceStatus(devId); // publish retained position for 1W (no device feedback)
                     break;
                 case MqttCmdType::ON:
                 case MqttCmdType::UNLOCK:

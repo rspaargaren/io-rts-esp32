@@ -249,7 +249,11 @@ async def http_get_devices(session: aiohttp.ClientSession) -> list:
 
 class MqttBridge:
     def __init__(self):
-        self._client = mqtt.Client(client_id="io-rts-stress-test", protocol=mqtt.MQTTv311)
+        self._client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            client_id="io-rts-stress-test",
+            protocol=mqtt.MQTTv311,
+        )
         self._client.username_pw_set(MQTT_USER, MQTT_PASS)
         self._client.on_connect    = self._on_connect
         self._client.on_disconnect = self._on_disconnect
@@ -258,18 +262,18 @@ class MqttBridge:
         self._state_callbacks: list = []   # list of (device_id, asyncio.Event, result_dict)
         self._loop = None
 
-    def _on_connect(self, client, userdata, flags, rc):
-        if rc == 0:
+    def _on_connect(self, client, userdata, connect_flags, reason_code, properties):
+        if reason_code.is_failure:
+            log_fail("MQTT", f"Connect failed: {reason_code}")
+        else:
             self._connected = True
             client.subscribe(f"{MQTT_PREFIX}/#")
             log_mqtt("MQTT", f"Connected to {MQTT_HOST}:{MQTT_PORT}, subscribed to {MQTT_PREFIX}/#")
-        else:
-            log_fail("MQTT", f"Connect failed rc={rc}")
 
-    def _on_disconnect(self, client, userdata, rc):
+    def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         self._connected = False
-        if rc != 0:
-            log_fail("MQTT", f"Unexpected disconnect rc={rc}")
+        if reason_code.value != 0:
+            log_fail("MQTT", f"Unexpected disconnect rc={reason_code.value}")
 
     def _on_message(self, client, userdata, msg):
         topic = msg.topic

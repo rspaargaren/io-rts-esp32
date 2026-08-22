@@ -1,4 +1,5 @@
 #include "DeviceStorage.hpp"
+#include "NvsHelpers.hpp"
 
 #include "esp_littlefs.h"
 #include "cJSON.h"
@@ -11,6 +12,7 @@
 static const char *TAG = "devStorage";
 
 static constexpr const char *STORAGE_BASE_PATH  = "/devices";
+static constexpr const char *SEQ_NVS_NS         = "io_seq";
 static constexpr const char *STORAGE_PARTITION  = "devices";
 static constexpr const char *STORAGE_FILE       = "/devices/devices.json";
 static constexpr size_t      STORAGE_MAX_SIZE   = 65536; // 64 KB — fits 250+ devices
@@ -369,5 +371,25 @@ namespace Helpers
         }
 
         return changed ? WriteAllDevices(all) : ESP_OK;
+    }
+
+    // ─── NVS sequence helpers (1W rolling codes) ──────────────────────────────
+
+    esp_err_t DeviceStorage::SaveSequence1W(const std::string &deviceID, uint16_t sequence)
+    {
+        esp_err_t err = NvsHelpers::SetValue<uint16_t>(SEQ_NVS_NS, deviceID, sequence);
+        if (err == ESP_OK)
+            ESP_LOGD(TAG, "NVS seq %s = 0x%04X", deviceID.c_str(), sequence);
+        return err;
+    }
+
+    esp_err_t DeviceStorage::LoadSequence1W(const std::string &deviceID, uint16_t &sequence)
+    {
+        return NvsHelpers::GetValue<uint16_t>(SEQ_NVS_NS, deviceID, sequence);
+    }
+
+    esp_err_t DeviceStorage::EraseSequence1W(const std::string &deviceID)
+    {
+        return NvsHelpers::DeleteValue(SEQ_NVS_NS, deviceID);
     }
 }

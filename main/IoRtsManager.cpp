@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_random.h"
+#include "nvs.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "ioRtsMan";
@@ -179,6 +180,8 @@ namespace IoRts
         if (!sIoRtsManager) return;
         int64_t now = esp_timer_get_time();
 
+        std::vector<std::string> completed1w;
+
         sIoRtsManager->mIoDevicesMutex.lock();
         for (auto &[id, dev] : sIoRtsManager->mIoDevices)
         {
@@ -208,11 +211,26 @@ namespace IoRts
             if (sMqttHelper != nullptr)
                 sMqttHelper->PublishEstimatedPosition(id, estimated_int, state);
 
-            // Stop broadcasting once clamped (device should report back soon)
             if (fraction >= 1.0f)
+            {
+                // For 1W: lock in estimated position so retained MQTT stays correct after broker/HA restart
+                if (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W)
+                {
+                    dev.position   = dev.move_target_pos;
+                    dev.is_stopped = true;
+                    completed1w.push_back(id);
+                }
                 dev.move_start_us = 0;
+            }
         }
         sIoRtsManager->mIoDevicesMutex.unlock();
+
+        // Publish retained status for completed 1W movements (mutex released)
+        if (sMqttHelper != nullptr)
+        {
+            for (const auto &id : completed1w)
+                sMqttHelper->SendIoDeviceStatus(id);
+        }
     }
 
     IoRtsManager::IoRtsManager()
@@ -431,6 +449,23 @@ namespace IoRts
             dev.quiet = storedDevice.quiet;
             strncpy(dev.local_name, storedDevice.local_name.c_str(), sizeof(dev.local_name) - 1);
             dev.local_name[sizeof(dev.local_name) - 1] = '\0';
+
+            // For 1W devices: NVS is authoritative for rolling code sequence.
+            // First-boot migration: if NVS has no entry yet, seed it from devices.json.
+            if (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W)
+            {
+                uint16_t nvs_seq = dev.info.sequence_1w;
+                esp_err_t nvsErr = Helpers::DeviceStorage::LoadSequence1W(deviceID, nvs_seq);
+                if (nvsErr == ESP_OK)
+                {
+                    dev.info.sequence_1w = nvs_seq;
+                }
+                else if (nvsErr == ESP_ERR_NVS_NOT_FOUND)
+                {
+                    Helpers::DeviceStorage::SaveSequence1W(deviceID, dev.info.sequence_1w);
+                    ESP_LOGI(TAG, "Migrated 1W seq for %s to NVS: 0x%04X", deviceID.c_str(), dev.info.sequence_1w);
+                }
+            }
 
             // Add to our local map regardless of active/inactive state
             mIoDevicesMutex.lock();
@@ -774,26 +809,33 @@ namespace IoRts
         }
     }
 
-    void IoRtsManager::StopMoveTracking(const std::string &deviceID)
+    bool IoRtsManager::StopMoveTracking(const std::string &deviceID)
     {
         std::lock_guard<std::mutex> guard(mIoDevicesMutex);
         auto it = mIoDevices.find(deviceID);
-        if (it != mIoDevices.end()) it->second.move_start_us = 0;
+        if (it == mIoDevices.end()) return false;
+        bool is1w = (it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
+        if (is1w && it->second.move_start_us != 0 && it->second.transit_time_ms > 0)
+        {
+            int64_t elapsed_ms = (esp_timer_get_time() - it->second.move_start_us) / 1000;
+            float fraction = std::min(1.0f, (float)elapsed_ms / (float)it->second.transit_time_ms);
+            it->second.position   = it->second.move_start_pos + (it->second.move_target_pos - it->second.move_start_pos) * fraction;
+            it->second.is_stopped = true;
+        }
+        it->second.move_start_us = 0;
+        return is1w;
     }
 
     void IoRtsManager::SaveDevice1WSequence(const std::string &deviceID)
     {
-        // Read-modify-write: load the full StoredIoDevice from flash to preserve
-        // linked_remotes, quiet, transit_time_ms, then patch sequence_1w.
-        Helpers::StoredIoDevice sd;
-        if (Helpers::DeviceStorage::LoadIoDevice(deviceID, sd) != ESP_OK) return;
+        uint16_t seq = 0;
         {
             std::lock_guard<std::mutex> lock(mIoDevicesMutex);
             auto it = mIoDevices.find(deviceID);
-            if (it != mIoDevices.end())
-                sd.device.info.sequence_1w = it->second.info.sequence_1w;
+            if (it == mIoDevices.end()) return;
+            seq = it->second.info.sequence_1w;
         }
-        Helpers::DeviceStorage::SaveIoDevice(deviceID, sd);
+        Helpers::DeviceStorage::SaveSequence1W(deviceID, seq);
     }
 
     std::string IoRtsManager::Pair1WDevice(const std::string &name, iohome::DeviceType type, iohome::Manufacturer manufacturer)
@@ -933,6 +975,7 @@ namespace IoRts
             mIoDevices.erase(deviceID);
         }
         Helpers::DeviceStorage::RemoveIoDevice(deviceID);
+        Helpers::DeviceStorage::EraseSequence1W(deviceID);
         return true;
     }
 

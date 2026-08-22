@@ -2197,7 +2197,7 @@ static bool json_to_stored_device(cJSON *item, std::string &deviceID, Helpers::S
     dev.info.is_low_power = cJSON_IsBool(lpItem) ? cJSON_IsTrue(lpItem) : true;
 
     cJSON *transitItem = cJSON_GetObjectItem(item, "transit_ms");
-    sd.transit_time_ms = cJSON_IsNumber(transitItem) ? (uint32_t)transitItem->valuedouble : 0;
+    sd.transit_time_ms = (cJSON_IsNumber(transitItem) && transitItem->valuedouble > 0) ? (uint32_t)transitItem->valuedouble : 30000;
 
     cJSON *quietItem = cJSON_GetObjectItem(item, "quiet");
     sd.quiet = cJSON_IsBool(quietItem) ? cJSON_IsTrue(quietItem) : false;
@@ -2456,10 +2456,10 @@ static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
         else
             strncpy(dev.info.name, nodeIdStr, iohome::CMD_PARAM_NAME_MAXSIZE - 1);
 
-        // transit_time_ms: travel_time in iohomecontrol is stored in seconds
+        // transit_time_ms: travel_time in iohomecontrol is stored in seconds; default 30 s if not provided
         cJSON *ttItem = cJSON_GetObjectItem(entry, "travel_time");
-        if (cJSON_IsNumber(ttItem) && ttItem->valuedouble > 0)
-            sd.transit_time_ms = (uint32_t)(ttItem->valuedouble * 1000.0);
+        sd.transit_time_ms = (cJSON_IsNumber(ttItem) && ttItem->valuedouble > 0)
+                             ? (uint32_t)(ttItem->valuedouble * 1000.0) : 30000;
 
         // is_low_power: default true for 1W motors (most are battery/solar)
         dev.info.is_low_power = true;
@@ -2477,6 +2477,9 @@ static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
             if (it != s_manager->mIoDevices.end()) it->second = sd.device;
             else s_manager->mIoDevices.insert({deviceID, sd.device});
         }
+
+        // Write sequence to NVS (authoritative store for rolling codes)
+        Helpers::DeviceStorage::SaveSequence1W(deviceID, dev.info.sequence_1w);
 
         imported++;
     }
@@ -2512,6 +2515,17 @@ static esp_err_t api_backup_get(httpd_req_t *req)
 
     std::map<std::string, Helpers::StoredIoDevice> storedDevices;
     Helpers::DeviceStorage::LoadAllIoDevices(storedDevices);
+    // For 1W devices: override sequence from NVS (authoritative) with a +10 safety bump
+    // so a restored system doesn't reuse codes already sent before the backup.
+    for (auto &[deviceID, sd] : storedDevices)
+    {
+        if (sd.device.info.protocol_mode == iohome::ProtocolMode::PROTO_1W)
+        {
+            uint16_t nvs_seq = sd.device.info.sequence_1w;
+            if (Helpers::DeviceStorage::LoadSequence1W(deviceID, nvs_seq) == ESP_OK)
+                sd.device.info.sequence_1w = nvs_seq + 10;
+        }
+    }
     cJSON *devArr = cJSON_CreateArray();
     for (const auto &[deviceID, sd] : storedDevices)
         cJSON_AddItemToArray(devArr, Helpers::DeviceStorage::DeviceToJson(deviceID, sd));

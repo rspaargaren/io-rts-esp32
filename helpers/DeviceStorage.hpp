@@ -49,6 +49,15 @@ namespace Helpers
 
         static cJSON *DeviceToJson(const std::string &deviceID, const StoredIoDevice &storedDevice);
 
+        /// @brief Save 1W rolling code sequence to NVS (namespace "io_seq", key = deviceID). Atomic, crash-safe.
+        static esp_err_t SaveSequence1W(const std::string &deviceID, uint16_t sequence);
+
+        /// @brief Load 1W rolling code sequence from NVS. Returns ESP_ERR_NVS_NOT_FOUND if not yet stored.
+        static esp_err_t LoadSequence1W(const std::string &deviceID, uint16_t &sequence);
+
+        /// @brief Erase 1W rolling code from NVS (call when permanently deleting a device).
+        static esp_err_t EraseSequence1W(const std::string &deviceID);
+
     private:
         static bool   JsonToDevice(const cJSON *obj, std::string &deviceID, StoredIoDevice &storedDevice);
         static esp_err_t ReadAllDevices(std::map<std::string, StoredIoDevice> &devices);

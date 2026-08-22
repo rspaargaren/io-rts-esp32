@@ -98,7 +98,7 @@ namespace IoRts
         /// When current position is unknown, assumes worst-case starting position based on direction.
         void StartMoveTracking(const std::string &deviceID, float target_pos);
         /// @brief Cancel position interpolation (e.g. after STOP command).
-        void StopMoveTracking(const std::string &deviceID);
+        bool StopMoveTracking(const std::string &deviceID); // returns true if device is 1W (caller should publish retained status)
 
         /// @brief Pair a new 1W device. Device must be in pairing mode. Returns new device ID or empty on failure.
         std::string Pair1WDevice(const std::string &name, iohome::DeviceType type, iohome::Manufacturer manufacturer);
