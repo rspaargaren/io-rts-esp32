@@ -461,11 +461,18 @@ static esp_err_t static_file_handler(httpd_req_t *req)
 
 static esp_err_t api_devices_get(httpd_req_t *req)
 {
-    cJSON *arr = cJSON_CreateArray();
+    httpd_resp_set_type(req, "application/json");
+    if (httpd_resp_send_chunk(req, "[", 1) != ESP_OK)
+        return ESP_FAIL;
 
     s_manager->mIoDevicesMutex.lock();
+    bool first = true;
     for (const auto &[id, dev] : s_manager->mIoDevices) {
         cJSON *obj = cJSON_CreateObject();
+        if (!obj) {
+            s_manager->mIoDevicesMutex.unlock();
+            return ESP_FAIL;
+        }
         cJSON_AddStringToObject(obj, "id", id.c_str());
         cJSON_AddStringToObject(obj, "name", iohome::device_display_name(dev).c_str());
         bool is1w = (dev.info.protocol_mode == iohome::ProtocolMode::PROTO_1W);
@@ -524,12 +531,29 @@ static esp_err_t api_devices_get(httpd_req_t *req)
             cJSON_AddItemToObject(obj, "info2_serial", parse_serial(dev.info.info2));
         }
 
-        cJSON_AddItemToArray(arr, obj);
+        char *str = cJSON_PrintUnformatted(obj);
+        cJSON_Delete(obj);
+        if (!str) {
+            s_manager->mIoDevicesMutex.unlock();
+            return ESP_FAIL;
+        }
+
+        esp_err_t err = ESP_OK;
+        if (!first)
+            err = httpd_resp_send_chunk(req, ",", 1);
+        if (err == ESP_OK)
+            err = httpd_resp_send_chunk(req, str, strlen(str));
+        cJSON_free(str);
+        if (err != ESP_OK) {
+            s_manager->mIoDevicesMutex.unlock();
+            return err;
+        }
+        first = false;
     }
     s_manager->mIoDevicesMutex.unlock();
 
-    send_json(req, arr);
-    return ESP_OK;
+    return httpd_resp_send_chunk(req, "]", 1) == ESP_OK &&
+           httpd_resp_send_chunk(req, nullptr, 0) == ESP_OK ? ESP_OK : ESP_FAIL;
 }
 
 // ─── GET /api/remotes ───────────────────────────────────────────────────────
@@ -545,18 +569,38 @@ static esp_err_t api_remotes_get(httpd_req_t *req)
         for (const std::string &remoteID : storedDevice.linked_remotes)
             remoteToDevices[remoteID].push_back(deviceID);
 
-    cJSON *arr = cJSON_CreateArray();
+    httpd_resp_set_type(req, "application/json");
+    if (httpd_resp_send_chunk(req, "[", 1) != ESP_OK)
+        return ESP_FAIL;
+
+    bool first = true;
     for (const auto &[remoteID, devices] : remoteToDevices) {
         cJSON *obj = cJSON_CreateObject();
+        if (!obj)
+            return ESP_FAIL;
         cJSON_AddStringToObject(obj, "id",   remoteID.c_str());
         cJSON_AddStringToObject(obj, "name", remoteID.c_str());
         cJSON *deviceArr = cJSON_AddArrayToObject(obj, "devices");
         for (const std::string &deviceID : devices)
             cJSON_AddItemToArray(deviceArr, cJSON_CreateString(deviceID.c_str()));
-        cJSON_AddItemToArray(arr, obj);
+        char *str = cJSON_PrintUnformatted(obj);
+        cJSON_Delete(obj);
+        if (!str)
+            return ESP_FAIL;
+
+        esp_err_t err = ESP_OK;
+        if (!first)
+            err = httpd_resp_send_chunk(req, ",", 1);
+        if (err == ESP_OK)
+            err = httpd_resp_send_chunk(req, str, strlen(str));
+        cJSON_free(str);
+        if (err != ESP_OK)
+            return err;
+        first = false;
     }
-    send_json(req, arr);
-    return ESP_OK;
+
+    return httpd_resp_send_chunk(req, "]", 1) == ESP_OK &&
+           httpd_resp_send_chunk(req, nullptr, 0) == ESP_OK ? ESP_OK : ESP_FAIL;
 }
 
 // ─── Calibration wizard (declarations, implementation further below) ─────────
