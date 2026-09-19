@@ -1,0 +1,25 @@
+Network form
+fallback-ap form
+mqtt form
+syslog form
+somfy form
+controller form
+io-key form
+ota-key form
+firmware shown in settings
+web-ui data show in settings
+web UI update
+Firmware update
+bakup and restore
+import iohomecontrol
+Devices
+Remotes
+pairing feature
+wifi scanning
+
+Cleanup html code
+Cleanup css
+Warning messages on form submit
+Toast messages on form submit
+styling checkbox
+styling disabled fields

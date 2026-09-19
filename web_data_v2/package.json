@@ -1,0 +1,23 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "preact": "^10.26.9",
+    "preact-iso": "^2.12.2"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.2",
+    "eslint": "^9.39.5",
+    "eslint-config-preact": "^2.0.0",
+    "prettier": "3.9.7",
+    "typescript": "^7.0.2",
+    "vite": "^8.0.0"
+  }
+}
