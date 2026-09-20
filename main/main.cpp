@@ -9,6 +9,7 @@
 #include "CmdLineManagement.hpp"
 #include "oled_display.h"
 #include "web_server.h"
+#include "esphome_api.hpp"
 
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -141,6 +142,7 @@ extern "C" void app_main(void)
 
 #if CONFIG_WEB_ENABLED
     web_server_start(&ioRtsManager);
+    esphome_api_start(&ioRtsManager);
     pair_log_append("BOOT");
 #endif
 
