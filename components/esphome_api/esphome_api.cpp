@@ -5,6 +5,8 @@
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "esp_log.h"
+#include "esp_app_desc.h"
+#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -12,6 +14,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <algorithm>
+#include <vector>
 
 static const char *TAG = "esphome";
 static const int   PORT        = 6053;
@@ -107,10 +110,83 @@ static bool recv_frame(int sock, uint32_t *msg_type, uint8_t *buf, size_t *len, 
     return true;
 }
 
-// ── Message handler stub (filled in Task 3) ──────────────────────────────────
+// ── Message helpers ───────────────────────────────────────────────────────────
+static void get_mac_str(char *out, size_t len) {
+    uint8_t mac[6] = {};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(out, len, "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static void send_hello_response(int sock) {
+    ProtoWriter pw;
+    pw.write_varint(1, 1);              // api_version_major
+    pw.write_varint(2, 10);             // api_version_minor
+    pw.write_string(3, "io-rts-esp32"); // server_info
+    pw.write_string(4, "io-rts-esp32"); // name
+    send_frame(sock, 2, pw);
+}
+
+static void send_connect_response(int sock) {
+    ProtoWriter pw;
+    pw.write_bool(1, false);  // invalid_password = false
+    send_frame(sock, 4, pw);
+}
+
+static void send_disconnect_response(int sock) {
+    ProtoWriter pw;
+    send_frame(sock, 6, pw);  // empty payload
+}
+
+static void send_ping_response(int sock) {
+    ProtoWriter pw;
+    send_frame(sock, 8, pw);  // empty payload
+}
+
+static void send_device_info_response(int sock) {
+    ProtoWriter pw;
+    pw.write_bool  (1, false);
+    pw.write_string(2, "io-rts-esp32");
+    char mac[20]; get_mac_str(mac, sizeof(mac));
+    pw.write_string(3, mac);
+    pw.write_string(4, "2024.1.0");     // esphome_version (static)
+    pw.write_string(5, "");             // compilation_time
+    pw.write_string(6, "io-rts-esp32"); // model
+    pw.write_string(8, "io-rts-esp32"); // project_name
+    const esp_app_desc_t *app = esp_app_get_description();
+    pw.write_string(9, app ? app->version : "unknown");
+    send_frame(sock, 10, pw);
+}
+
+// ── Message handler ───────────────────────────────────────────────────────────
 static void handle_message(EsphomeClient &c, uint32_t msg_type, const uint8_t *buf, size_t len) {
-    (void)c; (void)buf; (void)len;
-    ESP_LOGD(TAG, "msg_type=%u (stub)", msg_type);
+    if (msg_type == 0xFFFFFFFF) {   // Noise-encrypted — close
+        close(c.sock); c.sock = -1; c.connected = false; c.subscribed = false;
+        return;
+    }
+    switch (msg_type) {
+    case 1:  // HelloRequest — respond even before ConnectRequest
+        send_hello_response(c.sock);
+        break;
+    case 3:  // ConnectRequest — we accept any password
+        c.connected = true;
+        send_connect_response(c.sock);
+        break;
+    case 5:  // DisconnectRequest
+        send_disconnect_response(c.sock);
+        close(c.sock); c.sock = -1; c.connected = false; c.subscribed = false;
+        break;
+    case 7:  // PingRequest
+        send_ping_response(c.sock);
+        break;
+    case 9:  // DeviceInfoRequest
+        if (c.connected) send_device_info_response(c.sock);
+        break;
+    default:
+        ESP_LOGD(TAG, "Unhandled msg_type=%u len=%u", msg_type, (unsigned)len);
+        break;
+    }
+    (void)buf;
 }
 
 // ── Server task ───────────────────────────────────────────────────────────────
@@ -163,20 +239,32 @@ static void server_task(void *) {
             }
         }
 
-        // Readable clients — dispatch handled in Task 3
+        // Phase 1: brief lock — snapshot which sockets need reading
+        std::vector<std::pair<int,int>> to_read;
         xSemaphoreTake(s_mutex, portMAX_DELAY);
-        for (auto &c : s_clients) {
-            if (c.sock >= 0 && FD_ISSET(c.sock, &read_fds)) {
-                uint8_t buf[RECV_BUF]; size_t len; uint32_t msg_type;
-                if (!recv_frame(c.sock, &msg_type, buf, &len, sizeof(buf))) {
-                    ESP_LOGI(TAG, "Client disconnected sock=%d", c.sock);
-                    close(c.sock); c.sock = -1; c.connected = false; c.subscribed = false;
-                    continue;
-                }
-                handle_message(c, msg_type, buf, len);
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (s_clients[i].sock >= 0 && FD_ISSET(s_clients[i].sock, &read_fds)) {
+                to_read.push_back({s_clients[i].sock, i});
             }
         }
-        xSemaphoreGive(s_mutex);
+        xSemaphoreGive(s_mutex);  // release BEFORE blocking reads
+
+        // Phase 2 + 3: blocking recv per socket, then brief lock to update state
+        for (auto &[sock, idx] : to_read) {
+            uint8_t buf[RECV_BUF]; size_t len; uint32_t msg_type;
+            bool ok = recv_frame(sock, &msg_type, buf, &len, sizeof(buf));
+
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
+            if (s_clients[idx].sock != sock) { xSemaphoreGive(s_mutex); continue; } // client changed
+            if (!ok) {
+                ESP_LOGI(TAG, "Client disconnected sock=%d", sock);
+                close(sock); s_clients[idx].sock = -1;
+                s_clients[idx].connected = false; s_clients[idx].subscribed = false;
+            } else {
+                handle_message(s_clients[idx], msg_type, buf, len);
+            }
+            xSemaphoreGive(s_mutex);
+        }
     }
 }
 
