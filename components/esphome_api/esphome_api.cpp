@@ -128,7 +128,7 @@ static void send_hello_response(int sock) {
     ProtoWriter pw;
     pw.write_varint(1, 1);              // api_version_major
     pw.write_varint(2, 10);             // api_version_minor
-    pw.write_string(3, "io-rts-esp32"); // server_info
+    pw.write_string(3, "io-rts-esp32 esphome-2024.9.0 (esp32)"); // server_info
     pw.write_string(4, "io-rts-esp32"); // name
     send_frame(sock, 2, pw);
 }
