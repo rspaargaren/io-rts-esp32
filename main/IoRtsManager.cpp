@@ -5,6 +5,7 @@
 #include "IoHomeConfig.hpp"
 #include "DeviceStorage.hpp"
 #include "web_server.h"
+#include "esphome_api.hpp"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -182,6 +183,8 @@ namespace IoRts
             if (device.position != iohome::UNKNOWN_POSITION)
                 web_server_broadcast_position(deviceID.c_str(), (int)std::lround(device.position), device.is_stopped, false);
 #endif
+            if (device.position != iohome::UNKNOWN_POSITION)
+                esphome_api_notify_cover_state(deviceID.c_str(), device.position, !device.is_stopped);
             // send MQTT messages
             if (sMqttHelper != nullptr)
             {
@@ -231,6 +234,7 @@ namespace IoRts
 #if CONFIG_WEB_ENABLED
             web_server_broadcast_position(id.c_str(), estimated_int, false, true);
 #endif
+            esphome_api_notify_cover_state(id.c_str(), (float)estimated_int, true);
             if (sMqttHelper != nullptr)
                 sMqttHelper->PublishEstimatedPosition(id, estimated_int, state);
 

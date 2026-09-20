@@ -413,11 +413,15 @@ void esphome_api_start(void *io_rts_manager) {
 }
 
 void esphome_api_notify_cover_state(const char *device_id, float position, bool is_moving) {
-    (void)cover_key(device_id); (void)position; (void)is_moving;
-    // Implemented in Task 4
+    if (!s_mutex) return;
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(10)) != pdTRUE) return; // skip if contested
+    for (auto &c : s_clients) {
+        if (c.sock >= 0 && c.connected && c.subscribed)
+            send_cover_state_to(c.sock, device_id, position, is_moving);
+    }
+    xSemaphoreGive(s_mutex);
 }
 
 void esphome_api_notify_cover_removed(const char *device_id) {
-    (void)cover_key(device_id);
-    // Implemented in Task 4
+    (void)device_id;  // HA handles missing state updates gracefully
 }
