@@ -35,6 +35,11 @@ static uint32_t cover_key(const char *device_id) {
     return fnv1a(tmp);
 }
 
+static void device_object_id(const char *device_id, char *out, size_t len) {
+    snprintf(out, len, "io_%s", device_id);
+    for (char *p = out; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;
+}
+
 // ── Client state ─────────────────────────────────────────────────────────────
 struct EsphomeClient {
     int  sock       = -1;
@@ -158,6 +163,29 @@ static void send_device_info_response(int sock) {
     send_frame(sock, 10, pw);
 }
 
+// ── Entity listing ────────────────────────────────────────────────────────────
+// Sends one ListEntitiesCoverResponse per device, then ListEntitiesDoneResponse.
+// Called without any lock held; sock and devices are pre-captured by the caller.
+static void send_list_entities(int sock, const std::vector<std::pair<std::string,std::string>> &devices) {
+    for (auto &[id, name] : devices) {
+        char obj_id[32];
+        device_object_id(id.c_str(), obj_id, sizeof(obj_id));
+        ProtoWriter pw;
+        pw.write_string(1, obj_id);
+        pw.write_fixed32(2, cover_key(id.c_str()));
+        pw.write_string(3, name.c_str());
+        pw.write_string(4, obj_id);         // unique_id
+        pw.write_string(5, "mdi:blinds");   // icon
+        pw.write_bool  (6, false);          // assumed_state
+        pw.write_bool  (7, true);           // supports_position
+        pw.write_bool  (8, false);          // supports_tilt
+        pw.write_string(9, "shutter");      // device_class
+        send_frame(sock, 13, pw);
+    }
+    ProtoWriter done;
+    send_frame(sock, 19, done);
+}
+
 // ── Message handler ───────────────────────────────────────────────────────────
 static void handle_message(EsphomeClient &c, uint32_t msg_type, const uint8_t *buf, size_t len) {
     if (msg_type == 0xFFFFFFFF) {   // Noise-encrypted — close
@@ -181,6 +209,25 @@ static void handle_message(EsphomeClient &c, uint32_t msg_type, const uint8_t *b
         break;
     case 9:  // DeviceInfoRequest
         if (c.connected) send_device_info_response(c.sock);
+        break;
+    case 11:  // ListEntitiesRequest
+        if (!c.connected) break;
+        {
+            // Deadlock-safe pattern: release s_mutex BEFORE taking mIoDevicesMutex.
+            // Task 6 notify_cover_state is called while mIoDevicesMutex is held and then
+            // takes s_mutex (order: mIoDevicesMutex → s_mutex). Holding s_mutex and then
+            // taking mIoDevicesMutex would be the reverse order → deadlock.
+            int sock = c.sock;
+            xSemaphoreGive(s_mutex);          // release s_mutex first
+            std::vector<std::pair<std::string,std::string>> devices;
+            if (s_manager) {
+                std::lock_guard<std::mutex> g(s_manager->mIoDevicesMutex);
+                for (auto &kv : s_manager->mIoDevices)
+                    devices.push_back({kv.first, iohome::device_display_name(kv.second)});
+            }
+            send_list_entities(sock, devices);
+            xSemaphoreTake(s_mutex, portMAX_DELAY);  // re-acquire
+        }
         break;
     default:
         ESP_LOGD(TAG, "Unhandled msg_type=%u len=%u", msg_type, (unsigned)len);
