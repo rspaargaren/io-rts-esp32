@@ -50,6 +50,7 @@
 #include "NetworkConfig.hpp"
 #include "IoHomeConfig.hpp"
 #include "MiscConfig.hpp"
+#include "IntegrationConfig.hpp"
 #include "JsonStreamingParser2.h"
 #include "JsonPathCallback.h"
 
@@ -1968,6 +1969,44 @@ static esp_err_t api_io_config_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ─── GET /api/integration/config ─────────────────────────────────────────────
+
+static esp_err_t api_integration_config_get(httpd_req_t *req)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "integration_mode", Config::IntegrationConfig::GetMode().c_str());
+    send_json(req, obj);
+    return ESP_OK;
+}
+
+// ─── POST /api/integration/config ────────────────────────────────────────────
+
+static esp_err_t api_integration_config_post(httpd_req_t *req)
+{
+    if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
+    char *body = nullptr;
+    if (read_body(req, &body) != ESP_OK) { send_result(req, false, "Failed to read body"); return ESP_OK; }
+    cJSON *json = cJSON_Parse(body);
+    free(body);
+    if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
+    cJSON *jMode = cJSON_GetObjectItem(json, "integration_mode");
+    if (!cJSON_IsString(jMode)) {
+        cJSON_Delete(json);
+        send_result(req, false, "Missing integration_mode");
+        return ESP_OK;
+    }
+    std::string mode = jMode->valuestring;
+    if (mode != "mqtt" && mode != "esphome" && mode != "none") {
+        cJSON_Delete(json);
+        send_result(req, false, "integration_mode must be mqtt, esphome, or none");
+        return ESP_OK;
+    }
+    Config::IntegrationConfig::SetMode(mode);
+    cJSON_Delete(json);
+    send_result(req, true, "Integration mode saved — reboot to apply");
+    return ESP_OK;
+}
+
 // ─── POST /api/misc/password ────────────────────────────────────────────────
 
 static esp_err_t api_misc_password_post(httpd_req_t *req)
@@ -3772,9 +3811,11 @@ void web_server_start(void *ioRtsManager)
     reg("/api/io/key",            HTTP_POST, api_io_key_post);
     reg("/api/io/sniff",          HTTP_GET,  api_io_sniff_get);
     reg("/api/io/sniff",          HTTP_POST, api_io_sniff_post);
-    reg("/api/io/config",         HTTP_GET,  api_io_config_get);
-    reg("/api/io/config",         HTTP_POST, api_io_config_post);
-    reg("/api/misc/password",     HTTP_POST, api_misc_password_post);
+    reg("/api/io/config",          HTTP_GET,  api_io_config_get);
+    reg("/api/io/config",          HTTP_POST, api_io_config_post);
+    reg("/api/integration/config", HTTP_GET,  api_integration_config_get);
+    reg("/api/integration/config", HTTP_POST, api_integration_config_post);
+    reg("/api/misc/password",      HTTP_POST, api_misc_password_post);
     reg("/api/network/config",    HTTP_GET,  api_network_config_get);
     reg("/api/network/config",    HTTP_POST, api_network_config_post);
     reg("/api/wifi/config",       HTTP_GET,  api_wifi_config_get);

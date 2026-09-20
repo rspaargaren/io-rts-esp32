@@ -711,6 +711,22 @@
         loadIoKey(app);
     }
 
+    function initIntegrationMode() {
+        var sel = g("integration-mode-select");
+        var btn = g("integration-mode-save");
+        if (!sel || !btn) return;
+        window.MiOpenApi.requestJson("/api/integration/config")
+            .then(function(cfg) {
+                if (cfg.integration_mode) sel.value = cfg.integration_mode;
+            })
+            .catch(function() {});
+        btn.addEventListener("click", function() {
+            window.MiOpenApi.postJson("/api/integration/config", { integration_mode: sel.value })
+                .then(function(d) { showToast(d.message || (d.success ? t("settings.saved") : t("settings.error"))); })
+                .catch(function(e) { showToast(e.message || t("settings.error"), "error"); });
+        });
+    }
+
     function initPairingLog() {
         var btn = g("pairing-log-btn");
         if (!btn) return;
@@ -796,6 +812,7 @@
         initIoConfig(app);
         initAccessPassword(app);
         initIoKey(app);
+        initIntegrationMode();
         initPairingLog();
         initReboot();
 

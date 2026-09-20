@@ -3,6 +3,7 @@
 #include "HardwareConfig.hpp"
 #include "MqttConfig.hpp"
 #include "IoHomeConfig.hpp"
+#include "IntegrationConfig.hpp"
 #include "DeviceStorage.hpp"
 #include "web_server.h"
 #include "esphome_api.hpp"
@@ -812,7 +813,7 @@ namespace IoRts
     }
     void IoRtsManager::InitializeMqtt()
     {
-        if (MqttConfig::isEnabled())
+        if (MqttConfig::isEnabled() && Config::IntegrationConfig::GetMode() == "mqtt")
         {
             // Create MQTT helper
             sMqttHelper = new MqttHelpers(this);

@@ -3,6 +3,7 @@
 
 #include "HardwareConfig.hpp"
 #include "NetworkConfig.hpp"
+#include "IntegrationConfig.hpp"
 #include "NetworkHelpers.hpp"
 #include "WifiProvision.hpp"
 #include "IoRtsManager.hpp"
@@ -142,7 +143,9 @@ extern "C" void app_main(void)
 
 #if CONFIG_WEB_ENABLED
     web_server_start(&ioRtsManager);
-    esphome_api_start(&ioRtsManager);
+    if (Config::IntegrationConfig::GetMode() == "esphome") {
+        esphome_api_start(&ioRtsManager);
+    }
     pair_log_append("BOOT");
 #endif
 

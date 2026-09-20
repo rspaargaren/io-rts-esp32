@@ -593,6 +593,17 @@
             <span class="row-label" data-i18n="settings.row.pairing-log">Pairing Log</span>
             <div class="row-right"><button class="s-btn" id="pairing-log-btn" data-i18n="button.download">Download</button></div>
           </div>
+          <div class="settings-row">
+            <span class="row-label" data-i18n="settings.row.integration">Integration</span>
+            <div class="row-right">
+              <select id="integration-mode-select" class="s-select">
+                <option value="mqtt" data-i18n="settings.integration.mqtt">MQTT</option>
+                <option value="esphome" data-i18n="settings.integration.esphome">ESPHome</option>
+                <option value="none" data-i18n="settings.integration.none">None</option>
+              </select>
+              <button class="s-btn" id="integration-mode-save" data-i18n="button.save">Save</button>
+            </div>
+          </div>
           <!-- Reboot (flat) -->
           <div class="settings-row">
             <span class="row-label danger" id="reboot-btn" data-i18n="settings.row.reboot" style="cursor:pointer;">Reboot Device</span>
