@@ -120,7 +120,7 @@ static bool recv_frame(int sock, uint32_t *msg_type, uint8_t *buf, size_t *len, 
 static void get_mac_str(char *out, size_t len) {
     uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf(out, len, "%02X:%02X:%02X:%02X:%02X:%02X",
+    snprintf(out, len, "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
@@ -155,12 +155,15 @@ static void send_device_info_response(int sock) {
     pw.write_string(2, "io-rts-esp32");
     char mac[20]; get_mac_str(mac, sizeof(mac));
     pw.write_string(3, mac);
-    pw.write_string(4, "2024.1.0");     // esphome_version (static)
+    pw.write_string(4, "2024.9.0");     // esphome_version
     pw.write_string(5, "");             // compilation_time
-    pw.write_string(6, "io-rts-esp32"); // model
+    pw.write_string(6, "io-rts-esp32"); // model (hardware)
     pw.write_string(8, "io-rts-esp32"); // project_name
     const esp_app_desc_t *app = esp_app_get_description();
     pw.write_string(9, app ? app->version : "unknown");
+    pw.write_varint (10, 80);           // webserver_port
+    pw.write_string(12, "io-rts-esp32"); // manufacturer
+    pw.write_string(13, "io-rts-esp32"); // friendly_name
     send_frame(sock, 10, pw);
 }
 
@@ -203,7 +206,7 @@ static void send_list_entities(int sock, const std::vector<std::pair<std::string
 
 // ── Message handler ───────────────────────────────────────────────────────────
 static void handle_message(EsphomeClient &c, uint32_t msg_type, const uint8_t *buf, size_t len) {
-    if (msg_type == 0xFFFFFFFF) {   // Noise-encrypted — close
+    if (msg_type == 0xFFFFFFFF) {   // Noise probe — silent close, same as Omni-IO
         close(c.sock); c.sock = -1; c.connected = false; c.subscribed = false;
         return;
     }
@@ -339,7 +342,19 @@ static void server_task(void *) {
     addr.sin_port        = htons(PORT);
     bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr));
     listen(listen_sock, MAX_CLIENTS);
-    mdns_service_add(NULL, "_esphomelib", "_tcp", PORT, NULL, 0);
+    {
+        char mac_str[20];
+        get_mac_str(mac_str, sizeof(mac_str));
+        mdns_txt_item_t txt[] = {
+            {"version", "2024.9.0"},
+            {"mac",     mac_str},
+            {"platform","ESP32"},
+            {"board",   "heltec_wifi_lora_32_V2"},
+            {"network", "wifi"},
+        };
+        mdns_service_remove("_esphomelib", "_tcp");
+        mdns_service_add(NULL, "_esphomelib", "_tcp", PORT, txt, sizeof(txt)/sizeof(txt[0]));
+    }
     ESP_LOGI(TAG, "ESPHome API server listening on port %d", PORT);
 
     while (true) {
@@ -364,6 +379,11 @@ static void server_task(void *) {
             if (new_sock >= 0) {
                 int yes = 1;
                 setsockopt(new_sock, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+                setsockopt(new_sock, SOL_SOCKET, SO_KEEPALIVE, &yes, sizeof(yes));
+                int keepidle = 15, keepintvl = 5, keepcnt = 3;
+                setsockopt(new_sock, IPPROTO_TCP, TCP_KEEPIDLE,  &keepidle,  sizeof(keepidle));
+                setsockopt(new_sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+                setsockopt(new_sock, IPPROTO_TCP, TCP_KEEPCNT,   &keepcnt,   sizeof(keepcnt));
                 struct timeval t = {5, 0};
                 setsockopt(new_sock, SOL_SOCKET, SO_RCVTIMEO, &t, sizeof(t));
                 setsockopt(new_sock, SOL_SOCKET, SO_SNDTIMEO, &t, sizeof(t));
