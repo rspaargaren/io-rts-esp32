@@ -163,6 +163,20 @@ static void send_device_info_response(int sock) {
     send_frame(sock, 10, pw);
 }
 
+// ── Cover state ───────────────────────────────────────────────────────────────
+// position_pct: 0.0 = open, 100.0 = closed (device convention)
+// HA convention: 1.0 = fully open, 0.0 = fully closed → invert
+static void send_cover_state_to(int sock, const char *device_id, float position_pct, bool is_moving) {
+    float pos_ha = 1.0f - (position_pct / 100.0f);  // invert: our 0 (open) → HA 1.0
+    uint32_t key = cover_key(device_id);
+    ProtoWriter pw;
+    pw.write_fixed32(1, key);
+    pw.write_varint (2, pos_ha > 0.5f ? 0 : 1);   // legacy_state 0=OPEN 1=CLOSED
+    pw.write_float  (3, pos_ha);                    // position 0.0–1.0
+    pw.write_varint (5, is_moving ? 1 : 0);         // current_operation 0=IDLE 1=OPENING/CLOSING
+    send_frame(sock, 22, pw);
+}
+
 // ── Entity listing ────────────────────────────────────────────────────────────
 // Sends one ListEntitiesCoverResponse per device, then ListEntitiesDoneResponse.
 // Called without any lock held; sock and devices are pre-captured by the caller.
@@ -229,6 +243,82 @@ static void handle_message(EsphomeClient &c, uint32_t msg_type, const uint8_t *b
             xSemaphoreTake(s_mutex, portMAX_DELAY);  // re-acquire
         }
         break;
+    case 20:  // SubscribeStatesRequest
+        if (!c.connected) break;
+        {
+            // Deadlock-safe: snapshot under mIoDevicesMutex only after releasing s_mutex
+            // (mIoDevicesMutex → s_mutex order; holding s_mutex and taking mIoDevicesMutex
+            //  would be the reverse order → deadlock with Task-6 notify path)
+            std::vector<std::tuple<std::string, float, bool>> snapshot;
+            {
+                xSemaphoreGive(s_mutex);
+                if (s_manager) {
+                    std::lock_guard<std::mutex> g(s_manager->mIoDevicesMutex);
+                    for (auto &kv : s_manager->mIoDevices) {
+                        float pos = kv.second.position;
+                        if (pos == iohome::UNKNOWN_POSITION) pos = 50.0f;
+                        bool moving = (kv.second.move_start_us != 0);
+                        snapshot.push_back({kv.first, pos, moving});
+                    }
+                }
+                xSemaphoreTake(s_mutex, portMAX_DELAY);
+            }
+            int sock = c.sock;
+            c.subscribed = true;
+            xSemaphoreGive(s_mutex);
+            for (auto &[id, pos, moving] : snapshot)
+                send_cover_state_to(sock, id.c_str(), pos, moving);
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
+        }
+        break;
+    case 30: {  // CoverCommandRequest
+        if (!c.connected || !s_manager) break;
+        ProtoReader pr(buf, len);
+        uint32_t key = 0;
+        bool     has_pos = false, stop = false, has_legacy = false;
+        float    pos_ha = 0.0f;
+        uint64_t legacy_cmd = 0;
+        uint32_t field, wire; uint64_t uv;
+        while (pr.read_tag(&field, &wire)) {
+            switch (field) {
+            case 1: { uint32_t v; pr.read_fixed32(&v); key = v; break; }
+            case 2: pr.read_varint(&uv); has_legacy = (bool)uv; break;
+            case 3: pr.read_varint(&legacy_cmd); break;
+            case 4: pr.read_varint(&uv); has_pos = (bool)uv; break;
+            case 5: { uint32_t bits; pr.read_fixed32(&bits); memcpy(&pos_ha, &bits, 4); break; }
+            case 8: pr.read_varint(&uv); stop = (bool)uv; break;
+            default: pr.skip(wire); break;
+            }
+        }
+        // Find device by key — release s_mutex before locking mIoDevicesMutex
+        std::string target_id;
+        {
+            xSemaphoreGive(s_mutex);
+            {
+                std::lock_guard<std::mutex> g(s_manager->mIoDevicesMutex);
+                for (auto &kv : s_manager->mIoDevices)
+                    if (cover_key(kv.first.c_str()) == key) { target_id = kv.first; break; }
+            }
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
+        }
+        if (target_id.empty()) {
+            ESP_LOGW(TAG, "CoverCommand: unknown key %08X", (unsigned)key);
+            break;
+        }
+        // Dispatch — SetDevicePosition/StopDevice do not need s_mutex
+        xSemaphoreGive(s_mutex);
+        if (stop || (has_legacy && legacy_cmd == 2)) {
+            s_manager->StopDevice(target_id);
+        } else if (has_pos) {
+            // HA pos: 1.0=open, 0.0=closed → device: 0=open, 100=closed
+            s_manager->SetDevicePosition(target_id, (uint8_t)((1.0f - pos_ha) * 100.0f));
+        } else if (has_legacy) {
+            if (legacy_cmd == 0) s_manager->SetDevicePosition(target_id, 0);    // OPEN
+            if (legacy_cmd == 1) s_manager->SetDevicePosition(target_id, 100);  // CLOSE
+        }
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        break;
+    }
     default:
         ESP_LOGD(TAG, "Unhandled msg_type=%u len=%u", msg_type, (unsigned)len);
         break;
