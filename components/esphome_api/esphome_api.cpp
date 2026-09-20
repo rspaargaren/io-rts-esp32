@@ -4,6 +4,7 @@
 
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
+#include "mdns.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
 #include "esp_mac.h"
@@ -338,6 +339,7 @@ static void server_task(void *) {
     addr.sin_port        = htons(PORT);
     bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr));
     listen(listen_sock, MAX_CLIENTS);
+    mdns_service_add(NULL, "_esphomelib", "_tcp", PORT, NULL, 0);
     ESP_LOGI(TAG, "ESPHome API server listening on port %d", PORT);
 
     while (true) {
