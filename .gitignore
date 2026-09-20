@@ -107,3 +107,4 @@ node_modules
 package-lock.json
 web_data_v2/version.json
 # .gz files are pre-compressed assets committed to the repo for deployment
+omniio/
