@@ -68,6 +68,15 @@ static const std::string MQTT_CLIENT_LOG_TOPIC = "/log"; // log topic
 
 static const char *TAG = "MQTTHelper";
 
+// Depth of mCommandQueue. Commands are executed serially over RF (~1 s each), so group
+// actions (e.g. "all lights off" in Home Assistant) burst one command per device at once.
+static constexpr UBaseType_t MQTT_CMD_QUEUE_DEPTH = 64;
+
+// While draining a burst the worker holds IoHomeControl status polls back, so every command goes
+// out before the radio is spent on status polls. After the last command it waits this long for a
+// straggler before releasing the hold.
+static constexpr TickType_t MQTT_CMD_BURST_GRACE_MS = 250;
+
 // Command packet sent through mCommandQueue — keeps the MQTT callback non-blocking.
 struct MqttCmd {
     char    device_id[7]; // 6 hex chars + null terminator
@@ -585,10 +594,24 @@ namespace Helpers
         auto *self = static_cast<MqttHelpers *>(arg);
         auto *mgr  = self->mIoRtsManager;
         MqttCmd cmd;
+        bool holdingPolls = false;
         while (true)
         {
-            if (xQueueReceive(self->mCommandQueue, &cmd, portMAX_DELAY) != pdTRUE)
+            const TickType_t wait = holdingPolls ? pdMS_TO_TICKS(MQTT_CMD_BURST_GRACE_MS) : portMAX_DELAY;
+            if (xQueueReceive(self->mCommandQueue, &cmd, wait) != pdTRUE)
+            {
+                if (holdingPolls)
+                {
+                    mgr->mIoHome->ReleaseStatusPolls(); // burst done — overdue polls run now
+                    holdingPolls = false;
+                }
                 continue;
+            }
+            if (!holdingPolls)
+            {
+                mgr->mIoHome->HoldStatusPolls();
+                holdingPolls = true;
+            }
             const std::string devId(cmd.device_id);
             switch (cmd.type)
             {
@@ -752,7 +775,7 @@ namespace Helpers
         // Create command queue and worker task once — they outlive client restarts.
         if (mCommandQueue == nullptr)
         {
-            mCommandQueue = xQueueCreate(8, sizeof(MqttCmd));
+            mCommandQueue = xQueueCreate(MQTT_CMD_QUEUE_DEPTH, sizeof(MqttCmd));
             xTaskCreate(MqttCmdWorker, "mqtt_cmd", 4096, this, 5, &mCommandTask);
             ESP_LOGI(TAG, "MQTT command worker task started");
         }
