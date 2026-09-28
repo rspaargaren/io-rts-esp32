@@ -400,6 +400,7 @@ namespace iohome
           preambleSyncDetected = true;
           preambleSyncDetectedStartUs = esp_timer_get_time();
         }
+        // esp_timer_get_time() is already µs, as is the constant — no scaling.
         else if ((esp_timer_get_time() - preambleSyncDetectedStartUs) > CHANNEL_PREAMBLE_SYNC_TIMEOUT_US)
         {
           IO_LOGW("process_radio_task: Preamble/sync detection timeout, resetting radio");
