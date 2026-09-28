@@ -21,9 +21,19 @@ static iohome::IoHomeControl *sIoHome;
 static int do_iodiscover_cmd(int argc, char **argv)
 {
     auto result = sIoHome->DiscoverAndPairDevice();
-    if (result == iohome::PairResult::FAILED_NO_RESPONSE)
+    switch (result)
+    {
+    case iohome::PairResult::PAIRED_FULL:
+    case iohome::PairResult::PAIRED_SHORTCUT_VERIFIED:
+        return 0;
+    case iohome::PairResult::FAILED_KEY_MISMATCH:
+        ESP_LOGE(TAG, "Discover failed — device holds a different key, factory reset required");
+        return 1;
+    case iohome::PairResult::FAILED_NO_RESPONSE:
+    default:
         ESP_LOGW(TAG, "Discover failed — no device responded");
-    return 0;
+        return 1;
+    }
 }
 
 static void register_iodiscover(void)

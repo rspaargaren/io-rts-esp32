@@ -25,6 +25,8 @@ namespace iohome
 
   enum class PairResult {
     PAIRED_FULL,        // full key exchange succeeded (CMD 33 received)
+    PAIRED_SHORTCUT_VERIFIED, // existing shared key verified with CMD 03
+    FAILED_KEY_MISMATCH, // CMD 03 verification failed; factory reset required
     FAILED_NO_RESPONSE  // no CMD 29 received, or key exchange failed — retry
   };
 
