@@ -662,8 +662,13 @@ namespace iohome
     {
       if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
       {
+        // Poll, never block, while holding the mutex. A blocking receive here parked the
+        // global radio mutex for a full RECEIVED_IO_TREATMENT_WAIT_TICKS (500 ms) waiting on
+        // a frame that SendAndReceive had usually already consumed, stalling the next command
+        // by that much. The mutex is also what stops this task stealing frames SendAndReceive
+        // is waiting for, so it must stay held across the receive — just not while idle.
         RxFrameQueueItem item;
-        if (xQueueReceive(sRxIoQueue, &item, RECEIVED_IO_TREATMENT_WAIT_TICKS))
+        if (xQueueReceive(sRxIoQueue, &item, 0))
         {
           // Auto-stop key sniffing after timeout
           if (sSniffKeyActive && (esp_timer_get_time() - sSniffStartUs) > KEY_SNIFF_TIMEOUT_US)
@@ -819,12 +824,12 @@ namespace iohome
           }
         }
         xSemaphoreGive(sMutex);
-        vTaskDelay(pdMS_TO_TICKS(5)); // yield so P4/httpd can acquire mutex between frames
       }
       else
       {
         IO_LOGE("ProcessReceivedFrameTask - No mutex available!");
       }
+      vTaskDelay(pdMS_TO_TICKS(5)); // yield so P4/httpd can acquire mutex between frames
     }
   }
 
