@@ -35,7 +35,64 @@ constexpr TickType_t RECEIVED_IO_TREATMENT_WAIT_TICKS = 500 * portTICK_PERIOD_MS
 constexpr TickType_t RECEIVED_IO_DISCOVERY_RESPONSE_WAIT_TICKS = 2000 * portTICK_PERIOD_MS; // 2s, I have seen devices between 1s and 1.5s!
 
 constexpr TickType_t UPDATE_STATUS_WAKEUP_INTERVAL_MS = 1000; // 1 second
-constexpr TickType_t TIME_BETWEEN_RETRY_MS = 250;             // 250 ms
+constexpr TickType_t TIME_BETWEEN_RETRY_MS = 40;              // was 250 ms; the reference controller retries at ~106 ms including its own think time
+
+/// Slack added on top of the transmitted preamble's airtime when waiting for a device reply.
+/// Covers the device turnaround (18.7 ms worst case across Capture A and Capture D) plus this
+/// firmware's own per-leg stack overhead (~76 ms, Capture C minus preamble) - ~2.6x margin on
+/// the sum. Deliberately generous: a timeout that fires early would be mistaken for a failed
+/// short probe and demote a perfectly good device to NEEDS_LONG. Tighten once §9.7 is done.
+/// The preamble airtime is added separately because the response timer starts when the frame
+/// is *queued*, not when it leaves the antenna - a long preamble alone is 213 ms of airtime
+/// and would otherwise blow the whole budget before TX even finishes.
+constexpr TickType_t RESPONSE_WAIT_SLACK_MS = 200;
+
+/// A device that answered us this recently is assumed to still have its receiver on. Used only
+/// by PreamblePolicy::WAKE_FIRST - the ladder handles the ADAPTIVE case on its own, and the
+/// evidence says acquisition is a margin problem rather than a sleep/wake one (see the ladder
+/// commentary below).
+constexpr int64_t PREAMBLE_AWAKE_WINDOW_US = 5'000'000LL; // 5 s
+
+/// Preamble for a frame to a device that is awake and listening - the everyday case.
+///
+/// NOT the same as SHORT_PREAMBLE_LENGTH (8 B / 1.7 ms). 8 bytes was tried and is too short:
+/// E468A9 answered a long-preamble CMD 00 with its challenge and then did not hear the 8-byte
+/// CMD 3D that followed 3 ms later, twice in a row. Back-solving the reference controller's
+/// inter-frame gaps in Capture D gives the real figure - across six independent exchange
+/// types (3C->3D, 19->FE, 03->04, 46->47, 4A->3C, 3D->4B) and for turnarounds of 3-5 ms, both
+/// the controller's frames and the devices' replies imply ~17-36 bytes. 32 B (6.7 ms) sits at
+/// the top of that band: still 32x cheaper than the wake-up burst, with margin for a device
+/// that samples the channel rather than listening continuously.
+///
+/// Runtime-tunable via `io_preamble normal <bytes>` so the value can be swept on hardware.
+static uint16_t sNormalPreambleLength = 32;
+
+/// @brief Pick the TX preamble for a frame from the destination's power class.
+/// @param frame Frame about to be transmitted
+/// @return LONG_PREAMBLE_LENGTH for duty-cycled (solar/battery) destinations, else SHORT
+/// @note The long preamble is a wake-up burst, ~213 ms of airtime at BIT_RATE. It was
+///       previously keyed off the 'start' flag, which create_execute_request() sets
+///       unconditionally — so every command paid it twice (request + challenge response)
+///       whether or not the device needed waking. The reference controller sets 'start'
+///       on its command frames too, yet turns them around in ~11 ms.
+static inline uint16_t select_preamble(const iohome::IoFrame &frame)
+{
+  return iohome::is_low_power(frame) ? iohome::LONG_PREAMBLE_LENGTH : iohome::SHORT_PREAMBLE_LENGTH;
+}
+
+/// @brief Airtime of a preamble of the given length, in milliseconds.
+/// @param preamble_bytes Preamble length as written to REG_PREAMBLEMSB/LSB (bytes)
+/// @note 1024 bytes = 8192 bits / 38400 bps = 213 ms. 8 bytes = 1.7 ms.
+static inline uint32_t preamble_airtime_ms(uint16_t preamble_bytes)
+{
+  return ((uint32_t)preamble_bytes * 8u * 1000u) / iohome::BIT_RATE;
+}
+
+/// @brief Response wait for a leg that transmitted the given preamble.
+static inline TickType_t response_wait_ticks(uint16_t preamble_bytes)
+{
+  return pdMS_TO_TICKS(RESPONSE_WAIT_SLACK_MS + preamble_airtime_ms(preamble_bytes));
+}
 
 constexpr UBaseType_t RADIO_FRAME_PROCESSING_PRIORITY = tskIDLE_PRIORITY + 8; // priority higher than IDLE as we want relevant frequency hopping
 constexpr UBaseType_t IO_FRAME_PROCESSING_TASK = tskIDLE_PRIORITY + 6;        // priority higher than IDLE but less than radio, to perform IO frame work
@@ -253,6 +310,157 @@ namespace iohome
       return matched;
   }
 
+
+  // --------------------------------------------------------------------------
+  // Adaptive preamble selection
+  // --------------------------------------------------------------------------
+  // The long preamble is a wake-up burst for duty-cycled receivers and costs 213 ms of
+  // airtime. It used to be keyed off the frame's START flag, which is set on every command,
+  // so every exchange paid it twice.
+  //
+  // What the preamble actually buys, though, is not just waking a sleeping device: it is the
+  // time the receiver needs to settle AGC/AFC and match its preamble detector. That makes the
+  // requirement a function of *link margin*, not of a device's power class - which is what the
+  // evidence says:
+  //
+  //   - The reference controller's inter-frame gaps (Capture D) imply ~17-36 bytes of preamble
+  //     across six independent exchange types, in both directions. Not 8, and not 1024.
+  //   - SHORT_PREAMBLE_LENGTH (8 B / 1.7 ms) was tried and fails *intermittently*, not always,
+  //     and worst on weak links. E468A9 (seen at RSSI -81 and -41.5 within one exchange) missed
+  //     two successive 8-byte CMD 3D frames sent 3 ms after its own challenge - i.e. while it
+  //     was unambiguously awake and listening. Time-since-last-contact does not explain that;
+  //     margin does.
+  //
+  // So the preamble is learned per destination as a ladder rather than a device class. A device
+  // that misses frames climbs a rung; one that has been reliable for a while drops back down.
+  // Retries climb the ladder within a single command, so a marginal link costs one extra
+  // attempt rather than failing outright, and a device that needs more preamble pays 26.7 ms
+  // rather than jumping straight to 213 ms.
+
+  constexpr uint8_t PREAMBLE_MAX_LEVEL = 2;             // 0 = normal, 1 = 4x normal, 2 = wake-up burst
+  constexpr uint8_t PREAMBLE_FAILURES_TO_PROMOTE = 2;   // consecutive misses at a rung before climbing
+  constexpr uint16_t PREAMBLE_SUCCESSES_TO_DEMOTE = 20; // consecutive hits before trying a cheaper rung
+
+  /// @brief Per-destination preamble learning state. Guarded by sMutex - every SendAndReceive
+  ///        call site holds it for the duration of the exchange.
+  struct PreambleState
+  {
+    uint8_t level = 0;               // current rung, used for attempt 0 of both legs
+    uint8_t failures_at_level = 0;   // consecutive unanswered frames sent at `level`
+    uint16_t successes_at_level = 0; // consecutive answered frames sent at `level`
+    int64_t last_success_us = 0;     // end of the last completed exchange, for WAKE_FIRST
+  };
+  static std::map<uint32_t, PreambleState> sPreambleState; // keyed by node id packed into 24 bits
+
+  /// @brief Pack a 3-byte node id into a map key.
+  static inline uint32_t node_key(const uint8_t *node_id)
+  {
+    return ((uint32_t)node_id[0] << 16) | ((uint32_t)node_id[1] << 8) | (uint32_t)node_id[2];
+  }
+
+  /// @brief Preamble length, in bytes, for a rung of the ladder.
+  static uint16_t preamble_for_level(uint8_t level)
+  {
+    switch (level)
+    {
+    case 0:  return sNormalPreambleLength;          // ~32 B  /   6.7 ms - what the reference controller uses
+    case 1:  return (uint16_t)(sNormalPreambleLength * 4); // ~128 B /  26.7 ms - marginal link
+    default: return LONG_PREAMBLE_LENGTH;           // 1024 B / 213.3 ms - wake-up burst
+    }
+  }
+
+  /// @brief Choose the preamble for a frame in an exchange.
+  /// @param dest     destination node id (3 bytes)
+  /// @param request  the frame, for the LEGACY policy's CTRL1_LOW_POWER bit
+  /// @param policy   active preamble policy
+  /// @param attempt  0 for the first try, >0 for a retry
+  /// @param level    out: the rung actually used, to feed back to the learner
+  /// @return preamble length in bytes
+  /// @note Applies to both legs. A device can answer leg 1 and still miss leg 2 - re-sending
+  ///       leg 2 at a preamble that was just missed makes the retry pointless, which is exactly
+  ///       how E468A9 burned all three attempts.
+  /// @warning Caller must hold sMutex (every SendAndReceive call site does).
+  static uint16_t select_exchange_preamble(const uint8_t *dest,
+                                           const IoFrame &request,
+                                           PreamblePolicy policy,
+                                           uint8_t attempt,
+                                           uint8_t &level)
+  {
+    if (policy == PreamblePolicy::LEGACY)
+    {
+      level = PREAMBLE_MAX_LEVEL; // not learned from
+      return select_preamble(request);
+    }
+
+    PreambleState &st = sPreambleState[node_key(dest)];
+
+    if (policy == PreamblePolicy::WAKE_FIRST)
+    {
+      // The original hypothesis, kept testable: wake a cold device, then run fast while it is
+      // demonstrably still listening.
+      const int64_t now = esp_timer_get_time();
+      const bool awake = st.last_success_us != 0 && (now - st.last_success_us) < PREAMBLE_AWAKE_WINDOW_US;
+      if (!awake)
+      {
+        level = PREAMBLE_MAX_LEVEL;
+        return LONG_PREAMBLE_LENGTH;
+      }
+    }
+
+    // Climb within the command: each retry is at least one rung above the last attempt.
+    level = st.level + attempt;
+    if (level > PREAMBLE_MAX_LEVEL)
+      level = PREAMBLE_MAX_LEVEL;
+    return preamble_for_level(level);
+  }
+
+  /// @brief Feed one transmitted frame's outcome back into the ladder.
+  /// @param dest     destination node id
+  /// @param level    the rung that frame was sent at
+  /// @param answered whether a reply arrived before the timeout
+  /// @note Only results at the device's *current* rung move it. A retry that succeeded from a
+  ///       higher rung says nothing about whether the lower one has become viable again.
+  /// @warning Caller must hold sMutex.
+  static void note_preamble_result(const uint8_t *dest, uint8_t level, bool answered)
+  {
+    PreambleState &st = sPreambleState[node_key(dest)];
+    if (level != st.level)
+      return;
+
+    if (answered)
+    {
+      st.failures_at_level = 0;
+      if (st.successes_at_level < PREAMBLE_SUCCESSES_TO_DEMOTE)
+        st.successes_at_level++;
+      if (st.successes_at_level >= PREAMBLE_SUCCESSES_TO_DEMOTE && st.level > 0)
+      {
+        st.level--; // been reliable for a while; see whether a cheaper preamble still carries
+        st.successes_at_level = 0;
+        IO_LOGI("Preamble: {} down to level {} ({} B)",
+                buffToHexString(NODE_ID_SIZE, dest), st.level, preamble_for_level(st.level));
+      }
+      return;
+    }
+
+    st.successes_at_level = 0;
+    if (st.failures_at_level < PREAMBLE_FAILURES_TO_PROMOTE)
+      st.failures_at_level++;
+    if (st.failures_at_level >= PREAMBLE_FAILURES_TO_PROMOTE && st.level < PREAMBLE_MAX_LEVEL)
+    {
+      st.level++;
+      st.failures_at_level = 0;
+      IO_LOGW("Preamble: {} up to level {} ({} B)",
+              buffToHexString(NODE_ID_SIZE, dest), st.level, preamble_for_level(st.level));
+    }
+  }
+
+  /// @brief Record that an exchange with @p dest completed, so the awake window opens.
+  /// @warning Caller must hold sMutex.
+  static void note_exchange_success(const uint8_t *dest)
+  {
+    sPreambleState[node_key(dest)].last_success_us = esp_timer_get_time();
+  }
+
   /// @brief Low priority task that takes logs from queue and send them to registered callback
   /// @param arg Pointer to IoHomeControl object
   static void process_log_task(void *arg)
@@ -419,9 +627,10 @@ namespace iohome
         TxFrameQueueItem item;
         if (xQueueReceive(sTxIoQueue, &item, 0))
         {
-          IO_LOGI("Send ({:.2f}) command {:02X} from {} to {} CTRL0 {:02X} CTRL1 {:02X} - {} bytes: {}",
+          IO_LOGI("Send ({:.2f}) command {:02X} from {} to {} CTRL0 {:02X} CTRL1 {:02X} - {} bytes: {} [preamble {} B / {} ms]",
                   item.frequency / 1000000.0, item.frame.command_id, buffToHexString(NODE_ID_SIZE, item.frame.src_node), buffToHexString(NODE_ID_SIZE, item.frame.dest_node),
-                  item.frame.ctrl_byte_0, item.frame.ctrl_byte_1, item.frame.data_len, buffToHexString(item.frame.data_len, item.frame.data));
+                  item.frame.ctrl_byte_0, item.frame.ctrl_byte_1, item.frame.data_len, buffToHexString(item.frame.data_len, item.frame.data),
+                  item.preamble, preamble_airtime_ms(item.preamble));
           {
             char cmd_hex[5];
             snprintf(cmd_hex, sizeof(cmd_hex), "0x%02X", item.frame.command_id);
@@ -2083,7 +2292,7 @@ namespace iohome
         vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
         if (is_end(request))
         {
-          ret = TransmitFrame(request, frequency, is_start(request) ? LONG_PREAMBLE_LENGTH : SHORT_PREAMBLE_LENGTH);
+          ret = TransmitFrame(request, frequency, select_preamble(request));
         }
         else
         {
@@ -2132,71 +2341,125 @@ namespace iohome
 
   bool IoHomeControl::SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd)
   {
-    uint8_t tries = 3;
-    bool setStartFlagToAuthentResponse = true;
+    constexpr uint8_t MAX_TRIES = 3;
 
-    while (tries > 0)
+    for (uint8_t attempt = 0; attempt < MAX_TRIES; attempt++)
     {
-      if (tries < 3)
+      if (attempt > 0)
         vTaskDelay(pdMS_TO_TICKS(TIME_BETWEEN_RETRY_MS));
-      tries--;
 
-      if (TransmitFrame(request, frequency, is_start(request) ? LONG_PREAMBLE_LENGTH : SHORT_PREAMBLE_LENGTH))
-      {
-        RxFrameQueueItem rxItem;
-        if (ReceiveMatchingFrame(request.dest_node, request.src_node, -1,
-                                 RECEIVED_IO_TREATMENT_WAIT_TICKS, rxItem))
-        {
-          if (rxItem.frame.command_id != CMD_CHALLENGE_REQUEST)
-          {
-            memcpy(&response, &rxItem.frame, sizeof(response));
-            return true; // no need for authentication!
-          }
+      // ---- leg 1: the request ----
+      uint8_t level = 0;
+      const uint16_t preamble = select_exchange_preamble(request.dest_node, request, mPreamblePolicy,
+                                                         attempt, level);
 
-          // We have to authenticate!
-          IoFrame challengeResponse;
-          if (create_challenge_response(challengeResponse, request.dest_node, mOwnNodeId, rxItem.frame.data, request, mSystemKey))
-          {
-            if (setStartFlagToAuthentResponse)
-              challengeResponse.ctrl_byte_0 |= CTRL0_START;
-            if (TransmitFrame(challengeResponse, frequency, LONG_PREAMBLE_LENGTH))
-            {
-              // Now wait for final response
-              if (ReceiveMatchingFrame(request.dest_node, request.src_node, expected_response_cmd,
-                                       RECEIVED_IO_TREATMENT_WAIT_TICKS, rxItem))
-              {
-                memcpy(&response, &rxItem.frame, sizeof(response));
-                return true;
-              }
-              setStartFlagToAuthentResponse = true;
-              IO_LOGW("SendAndReceive: didn't receive final response!");
-              continue;
-            }
-            else
-            {
-              IO_LOGE("SendAndReceive: failed to send challenge response");
-              continue;
-            }
-          }
-          else
-          {
-            IO_LOGE("SendAndReceive: failed to create challenge response");
-            continue;
-          }
-        }
-        else
-        {
-          IO_LOGW("SendAndReceive: didn't receive response!");
-          continue;
-        }
-      }
-      else
+      if (!TransmitFrame(request, frequency, preamble))
       {
         IO_LOGE("SendAndReceive: didn't transmit request!");
         continue;
       }
+
+      RxFrameQueueItem rxItem;
+      if (!ReceiveMatchingFrame(request.dest_node, request.src_node, -1,
+                                response_wait_ticks(preamble), rxItem))
+      {
+        IO_LOGW("SendAndReceive: didn't receive response! (attempt {}/{}, preamble {} B)",
+                attempt + 1, MAX_TRIES, preamble);
+        note_preamble_result(request.dest_node, level, false);
+        continue;
+      }
+
+      if (rxItem.frame.command_id != CMD_CHALLENGE_REQUEST)
+      {
+        note_preamble_result(request.dest_node, level, true);
+        memcpy(&response, &rxItem.frame, sizeof(response));
+        note_exchange_success(request.dest_node);
+        return true; // no need for authentication!
+      }
+      // Leg 1 answered with a challenge: the attempt is scored by leg 2's outcome. Scoring
+      // leg 1 as a hit here would reset failures_at_level before a leg 2 miss is counted, so
+      // a device that only misses leg 2 (E468A9) would never climb the ladder.
+
+      // ---- leg 2: the challenge response ----
+      IoFrame challengeResponse;
+      if (!create_challenge_response(challengeResponse, request.dest_node, mOwnNodeId, rxItem.frame.data, request, mSystemKey))
+      {
+        IO_LOGE("SendAndReceive: failed to create challenge response");
+        continue;
+      }
+
+      // The START flag used to be set here unconditionally, which under the old rule forced a
+      // second 213 ms preamble and made process_radio_task pin the radio to this channel for
+      // CHANNEL_RESPONSE_START_TIME_US (300 ms) afterwards. The reference controller sends
+      // CMD 3D as CTRL0 0E. Kept as a retry fallback only.
+      if (attempt > 0)
+        challengeResponse.ctrl_byte_0 |= CTRL0_START;
+
+      // Leg 2 goes out at the same rung as leg 1. It must: answering leg 1 does not prove the
+      // device will hear leg 2 - E468A9 answered a long-preamble CMD 00 and then missed two
+      // successive 8-byte CMD 3D frames sent 3 ms later, burning every attempt.
+      uint8_t leg2Level = 0;
+      const uint16_t leg2Preamble = select_exchange_preamble(request.dest_node, request, mPreamblePolicy,
+                                                             attempt, leg2Level);
+
+      if (!TransmitFrame(challengeResponse, frequency, leg2Preamble))
+      {
+        IO_LOGE("SendAndReceive: failed to send challenge response");
+        continue;
+      }
+
+      if (!ReceiveMatchingFrame(request.dest_node, request.src_node, expected_response_cmd,
+                                response_wait_ticks(leg2Preamble), rxItem))
+      {
+        IO_LOGW("SendAndReceive: didn't receive final response! (attempt {}/{}, preamble {} B)",
+                attempt + 1, MAX_TRIES, leg2Preamble);
+        note_preamble_result(request.dest_node, leg2Level, false);
+        continue;
+      }
+      note_preamble_result(request.dest_node, leg2Level, true);
+
+      memcpy(&response, &rxItem.frame, sizeof(response));
+      note_exchange_success(request.dest_node);
+      return true;
     }
     return false;
+  }
+
+  void IoHomeControl::SetNormalPreambleLength(uint16_t bytes)
+  {
+    // Floor at the SX1276's own detector minimum; ceiling well below the wake-up burst so a
+    // typo cannot silently reintroduce the 213 ms cost.
+    if (bytes < 4) bytes = 4;
+    if (bytes > 255) bytes = 255;
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+    {
+      sNormalPreambleLength = bytes;
+      xSemaphoreGive(sMutex);
+      IO_LOGI("Normal preamble set to {} B ({} ms)", bytes, preamble_airtime_ms(bytes));
+    }
+    else
+    {
+      IO_LOGE("SetNormalPreambleLength: failed to take mutex!");
+    }
+  }
+
+  uint16_t IoHomeControl::GetNormalPreambleLength() const
+  {
+    return sNormalPreambleLength;
+  }
+
+  void IoHomeControl::ResetPreambleLearning()
+  {
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+    {
+      sPreambleState.clear();
+      xSemaphoreGive(sMutex);
+      IO_LOGI("Preamble learning reset");
+    }
+    else
+    {
+      IO_LOGE("ResetPreambleLearning: failed to take mutex!");
+    }
   }
 
   bool IoHomeControl::AuthenticateReceivedRequest(const IoFrame &request, uint32_t frequency)
