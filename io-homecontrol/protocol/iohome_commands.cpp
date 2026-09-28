@@ -88,10 +88,10 @@ namespace iohome
         return set_command(frame, CMD_EXECUTE_REQUEST, data, 8);
     }
 
-    bool create_getstatus03_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
+    bool create_getstatus03_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power)
     {
         // Initialize frame
-        init_frame(frame, true, true, false, true);
+        init_frame(frame, true, true, false, is_low_power);
 
         // Set source and destination
         set_destination(frame, dst_node_id);
@@ -103,10 +103,10 @@ namespace iohome
         return set_command(frame, CMD_PRIVATE, data, 3);
     }
 
-    bool create_getstatus03_tilt_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id)
+    bool create_getstatus03_tilt_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power)
     {
         // Initialize frame - same as regular status but with extended data to request tilt info
-        init_frame(frame, true, true, false, true);
+        init_frame(frame, true, true, false, is_low_power);
 
         // Set source and destination
         set_destination(frame, dst_node_id);
@@ -476,9 +476,9 @@ namespace iohome
         return set_command(frame, CMD_SET_CONFIG1, data, sizeof(data)); // device shall reply with command 0x70 and data 0x05 if OK, FE 08 if KO
     }
 
-    bool create_getbattery_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t function_id)
+    bool create_getbattery_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t function_id, bool is_low_power)
     {
-        init_frame(frame, true, true, false, true);
+        init_frame(frame, true, true, false, is_low_power);
         set_destination(frame, dst_node_id);
         set_source(frame, own_node_id);
         uint8_t data[3] = {function_id, 0x00, 0x00};

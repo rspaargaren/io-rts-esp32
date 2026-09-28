@@ -918,9 +918,9 @@ namespace iohome
                 IoFrame response;
                 bool reqOk;
                 if (deviceTypeSupportsTilt(dev->second.info.device_type))
-                  reqOk = create_getstatus03_tilt_request(request, mOwnNodeId, dev->second.info.node_id);
+                  reqOk = create_getstatus03_tilt_request(request, mOwnNodeId, dev->second.info.node_id, dev->second.info.is_low_power);
                 else
-                  reqOk = create_getstatus03_request(request, mOwnNodeId, dev->second.info.node_id);
+                  reqOk = create_getstatus03_request(request, mOwnNodeId, dev->second.info.node_id, dev->second.info.is_low_power);
                 UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
                 vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
                 bool exchangeOk = reqOk && SendAndReceive(request, response, FREQUENCY_CHANNEL_2);
@@ -2508,9 +2508,9 @@ namespace iohome
         // Use tilt-extended status request for devices that support tilt
         auto it = sDeviceMap.find(deviceID);
         if (it != sDeviceMap.end() && deviceTypeSupportsTilt(it->second.info.device_type))
-          ret = create_getstatus03_tilt_request(request, mOwnNodeId, tmpDeviceId);
+          ret = create_getstatus03_tilt_request(request, mOwnNodeId, tmpDeviceId, is_low_power);
         else
-          ret = create_getstatus03_request(request, mOwnNodeId, tmpDeviceId);
+          ret = create_getstatus03_request(request, mOwnNodeId, tmpDeviceId, is_low_power);
         expectedResponseID = CMD_PRIVATE_RESPONSE;
         break;
       }
@@ -2559,17 +2559,19 @@ namespace iohome
       bool status_ok = false, state_ok = false;
       uint16_t battery_status = 0, battery_state = 0;
       bool is_battery_powered = false;
+      auto devIt = sDeviceMap.find(deviceID);
+      const bool is_low_power = (devIt != sDeviceMap.end()) && devIt->second.info.is_low_power;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK);
 
-      if (create_getbattery_request(request, mOwnNodeId, tmpDeviceId, 0x06) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2) && response.command_id == CMD_PRIVATE_RESPONSE && response.data_len >= 4)
+      if (create_getbattery_request(request, mOwnNodeId, tmpDeviceId, 0x06, is_low_power) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2) && response.command_id == CMD_PRIVATE_RESPONSE && response.data_len >= 4)
       {
         is_battery_powered = (response.data[1] == 0x60);
         battery_status = (uint16_t)(response.data[2] << 8) | response.data[3];
         status_ok = true;
       }
 
-      if (create_getbattery_request(request, mOwnNodeId, tmpDeviceId, 0x09) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2) && response.command_id == CMD_PRIVATE_RESPONSE && response.data_len >= 4)
+      if (create_getbattery_request(request, mOwnNodeId, tmpDeviceId, 0x09, is_low_power) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2) && response.command_id == CMD_PRIVATE_RESPONSE && response.data_len >= 4)
       {
         battery_state = (uint16_t)(response.data[2] << 8) | response.data[3];
         state_ok = true;
