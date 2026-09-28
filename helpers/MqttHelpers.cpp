@@ -164,14 +164,13 @@ namespace Helpers
                         mqttHelper->PublishDeviceRemotesList(id);
                 }
             }
-            // Re-publish current state of all active devices so HA is immediately up-to-date
+            // Re-publish current state of all locally known devices so HA is immediately up-to-date
             {
                 std::vector<std::string> activeIDs;
                 {
                     std::lock_guard<std::mutex> guard(mgr->mIoDevicesMutex);
                     for (const auto &[id, dev] : mgr->mIoDevices)
-                        if (!dev.is_deleted)
-                            activeIDs.push_back(id);
+                        activeIDs.push_back(id);
                 }
                 for (const std::string &id : activeIDs)
                     mqttHelper->SendIoDeviceStatus(id);
@@ -658,11 +657,26 @@ namespace Helpers
     {
         mTopicPrefix = MqttConfig::GetTopicPrefix();
         mDiscoveryPrefix = MqttConfig::GetDiscoveryPrefix();
+#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &mqtt_network_event_handler, this);
+        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &mqtt_network_event_handler, this);
+#endif
+#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
+        esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &mqtt_network_event_handler, this);
+        esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &mqtt_network_event_handler, this);
+#endif
+        mNetworkHandlersRegistered = true;
     }
     esp_err_t MqttHelpers::StartMqttClient()
     {
+        std::lock_guard<std::recursive_mutex> lock(mLifecycleMutex);
         if (!MqttConfig::isEnabled() || mStarted)
             return ESP_ERR_NOT_ALLOWED;
+        if (!NetworkHelpers::isConnected())
+        {
+            mMqttState = MqttState::CONNECTING;
+            return ESP_ERR_INVALID_STATE;
+        }
         esp_err_t err = ESP_OK;
         // Keep strings alive until esp_mqtt_client_init() consumes them
         std::string brokerAddress = MqttConfig::GetBrokerAddress();
@@ -726,19 +740,6 @@ namespace Helpers
             mMqttClientHandle = nullptr;
             return ESP_FAIL;
         }
-        // Register network event handlers only once — they survive client restarts
-        if (!mNetworkHandlersRegistered)
-        {
-#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
-            esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &mqtt_network_event_handler, this);
-            esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &mqtt_network_event_handler, this);
-#endif
-#ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
-            esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &mqtt_network_event_handler, this);
-            esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &mqtt_network_event_handler, this);
-#endif
-            mNetworkHandlersRegistered = true;
-        }
         // Start
         err = esp_mqtt_client_start(mMqttClientHandle);
         if (err != ESP_OK)
@@ -762,6 +763,7 @@ namespace Helpers
 
     esp_err_t MqttHelpers::RestartMqttClient()
     {
+        std::lock_guard<std::recursive_mutex> lock(mLifecycleMutex);
         if (mStarted && mMqttClientHandle != nullptr)
         {
             // Tear down existing client; preserve the reconnect timer for reuse
@@ -783,6 +785,8 @@ namespace Helpers
 
     void MqttHelpers::SendDiscovery()
     {
+        if (!mMqttConnected || mMqttClientHandle == nullptr)
+            return;
         // See https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery
         // Controller and IO devices are separate HA devices.
         // IO devices link back to the controller via "via_device".
@@ -1464,7 +1468,7 @@ namespace Helpers
     }
     void MqttHelpers::SendIoDeviceStatus(const std::string &deviceId)
     {
-        if (IoHomeConfig::isPassiveModeEnabled())
+        if (!mMqttConnected || mMqttClientHandle == nullptr || IoHomeConfig::isPassiveModeEnabled())
             return; // don't send status if in passive mode
 
         // Copy device data under the mutex, then release before any blocking MQTT publish (M2).
@@ -1649,6 +1653,8 @@ namespace Helpers
     }
     void MqttHelpers::PublishInactiveDevicesList()
     {
+        if (!mMqttConnected || mMqttClientHandle == nullptr || mIoRtsManager == nullptr)
+            return;
         // Build semicolon-separated list of inactive devices and publish to state topic
         std::string list;
         {
@@ -1675,7 +1681,7 @@ namespace Helpers
     }
     void MqttHelpers::PublishDeviceRemotesList(const std::string &deviceID)
     {
-        if (!mStarted || mMqttClientHandle == nullptr)
+        if (!mMqttConnected || mMqttClientHandle == nullptr)
             return;
         Helpers::StoredIoDevice stored;
         if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) == ESP_OK)
@@ -1684,7 +1690,7 @@ namespace Helpers
 
     void MqttHelpers::PublishDeviceRemotesList(const std::string &deviceID, const Helpers::StoredIoDevice &stored)
     {
-        if (!mStarted || mMqttClientHandle == nullptr)
+        if (!mMqttConnected || mMqttClientHandle == nullptr)
             return;
         std::string list;
         for (const std::string &remote : stored.linked_remotes)
@@ -1698,7 +1704,7 @@ namespace Helpers
     }
     void MqttHelpers::PublishEstimatedPosition(const std::string &deviceId, int position, const char *state)
     {
-        if (!mStarted || mMqttClientHandle == nullptr) return;
+        if (!mMqttConnected || mMqttClientHandle == nullptr) return;
         std::string positionTopic = GetTopicPrefix() + "/" + MQTT_CLIENT_PREFIX_IO + deviceId + MQTT_CLIENT_POSITION_TOPIC;
         std::string data = std::to_string(position);
         esp_mqtt_client_publish(mMqttClientHandle, positionTopic.c_str(), data.c_str(), 0, 0, 0); // retain=0
@@ -1715,21 +1721,32 @@ namespace Helpers
         // dereferences an internal mutex that is only created by esp_mqtt_client_init (called from
         // StartMqttClient). The IoHomeControl log task can fire before StartMqttClient has run and
         // would otherwise crash the system on a null pointer.
-        if (!mStarted || mMqttClientHandle == nullptr)
+        if (!mMqttConnected || mMqttClientHandle == nullptr)
             return;
         std::string topic = mTopicPrefix + MQTT_CLIENT_LOG_TOPIC;
         esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), log.c_str(), 0, 0, 0);
     }
     void MqttHelpers::OnNetworkConnected()
     {
-        if (!mStarted || mMqttClientHandle == nullptr)
+        std::lock_guard<std::recursive_mutex> lock(mLifecycleMutex);
+        if (!NetworkHelpers::isConnected())
             return;
+        if (!mStarted || mMqttClientHandle == nullptr)
+        {
+            esp_err_t err = StartMqttClient();
+            if (err != ESP_OK && err != ESP_ERR_NOT_ALLOWED)
+                ESP_LOGE(TAG, "Failed to start MQTT client after network connected (%d)", err);
+            return;
+        }
         esp_timer_stop(mReconnectTimer); // cancel any pending broker-drop retry
         ESP_LOGI(TAG, "Network up — triggering MQTT reconnect");
         esp_mqtt_client_reconnect(mMqttClientHandle);
     }
     void MqttHelpers::OnNetworkDisconnected()
     {
+        mMqttConnected = false;
+        if (mMqttState != MqttState::ERROR)
+            mMqttState = MqttState::DISCONNECTED;
         if (!mStarted || mReconnectTimer == nullptr)
             return;
         ESP_LOGI(TAG, "Network down — cancelling MQTT reconnect timer");
