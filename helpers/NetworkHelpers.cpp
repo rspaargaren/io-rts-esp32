@@ -173,29 +173,40 @@ namespace Helpers
         if (sFallbackApRunning) { vTaskDelete(nullptr); return; }
         ESP_LOGI(TAG, "Starting fallback AP (APSTA mode)");
 
-        esp_wifi_set_mode(WIFI_MODE_APSTA);
-
         wifi_config_t ap_cfg = {};
         strncpy((char *)ap_cfg.ap.ssid, sCfgApSsid.c_str(), sizeof(ap_cfg.ap.ssid) - 1);
         ap_cfg.ap.ssid_len        = (uint8_t)sCfgApSsid.length();
-        ap_cfg.ap.channel         = 1;
+        ap_cfg.ap.channel         = sLastStaChannel ? sLastStaChannel : 1;
         ap_cfg.ap.max_connection  = 4;
         ap_cfg.ap.beacon_interval = 200;
         std::string ap_pwd = Config::MiscConfig::GetEffectiveAccessPassword();
-        if (ap_pwd.length() >= 8) {
+        bool ap_secured = (ap_pwd.length() >= 8);
+        if (ap_secured) {
             ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
             strncpy((char *)ap_cfg.ap.password, ap_pwd.c_str(), sizeof(ap_cfg.ap.password) - 1);
         } else {
             ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
-            ESP_LOGW(TAG, "CLI password < 8 chars — fallback AP is OPEN");
+            ESP_LOGW(TAG, "CLI password < 8 chars — fallback AP is OPEN; "
+                          "anyone in range can reach the provisioning portal");
         }
-        esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+        // The AP interface must be enabled before it can be configured:
+        // esp_wifi_set_config(WIFI_IF_AP) returns ESP_ERR_WIFI_MODE in STA-only mode
+        // and the softAP would come up with default SSID/auth.
+        esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+        if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Fallback AP setup failed: %s", esp_err_to_name(err));
+            esp_wifi_set_mode(WIFI_MODE_STA);
+            vTaskDelete(nullptr);
+            return;
+        }
 
         Helpers::WifiProvision::StartProvisionServer(true);
         Helpers::WifiProvision::StartDnsServer();
 
         sFallbackApRunning = true;
-        ESP_LOGI(TAG, "Fallback AP started: SSID=io-rts-setup (WPA2)");
+        ESP_LOGI(TAG, "Fallback AP started: SSID=%s (%s)",
+                 sCfgApSsid.c_str(), ap_secured ? "WPA2" : "OPEN");
 
 #if CONFIG_OLED_ENABLED
         oled_show_status("WiFi:io-rts-setup");
