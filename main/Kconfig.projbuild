@@ -147,6 +147,16 @@ menu "IO RTS Project Configuration"
                 bool "WPA3 PSK"
         endchoice
 
+        config WIFI_STA_MIN_RSSI
+            int "Minimum RSSI (dBm) an AP must have to be considered"
+            default -80
+            range -100 0
+            help
+                With an all-channel scan the station picks the strongest BSS that matches the
+                SSID. On networks where several APs share one SSID, this floor keeps it from
+                latching onto a distant AP whose link is too weak to complete the WPA
+                handshake. Set to -100 to disable the filter.
+
     endmenu
 
     menu "WiFi Fallback AP"
@@ -172,10 +182,12 @@ menu "IO RTS Project Configuration"
             int "Retries before AP starts after a connection is lost"
             depends on WIFI_FALLBACK_AP_ENABLED
             range 1 20
-            default 3
+            default 10
             help
                 Number of consecutive failures after a previously successful connection before
                 the AP starts. Avoids the AP flickering on/off during brief dropouts.
+                With the 5/10/20/30s backoff ladder, 10 retries is roughly 3.5 minutes --
+                long enough to ride out a router reboot or a DFS channel change.
 
         config WIFI_FALLBACK_AP_TIMEOUT_S
             int "Fallback AP auto-shutdown timeout in seconds (0 = never)"
