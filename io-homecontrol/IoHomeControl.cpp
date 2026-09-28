@@ -1370,7 +1370,36 @@ namespace iohome
               }
               else
               {
-                IO_LOGE("DiscoverAndPairDevice: key exchange failed — CMD 33 not received");
+                // Key exchange failed — device may already share our key (re-pairing scenario).
+                // Add provisionally and verify with CMD 03. Already holding sMutex — call low-level directly.
+                // A device already in the map (e.g. marked deleted) keeps its entry;
+                // only a provisional insert is rolled back on failure.
+                std::string deviceID = buffToHexString(NODE_ID_SIZE, device.info.node_id);
+                bool inserted = sDeviceMap.try_emplace(deviceID, device).second;
+                IoFrame statusReq, statusResp;
+                if (create_getstatus03_request(statusReq, mOwnNodeId, device.info.node_id, device.info.is_low_power)
+                    && SendAndReceive(statusReq, statusResp, FREQUENCY_CHANNEL_2)
+                    && statusResp.command_id == CMD_PRIVATE_RESPONSE)
+                {
+                  IO_LOGI("DiscoverAndPairDevice: shortcut verified — device {} responds to CMD 03, shared key confirmed", deviceID);
+                  result = PairResult::PAIRED_SHORTCUT_VERIFIED;
+                  // Queue device for immediate NVS save and UI notification
+                  auto it = sDeviceMap.find(deviceID);
+                  if (it != sDeviceMap.end())
+                  {
+                    it->second.is_deleted = false;
+                    if (strlen(it->second.info.name) == 0)
+                      strncpy(it->second.info.name, " ", sizeof(it->second.info.name) - 1);
+                    xQueueSend(sIoDeviceStatusQueue, &it->second, 0);
+                  }
+                }
+                else
+                {
+                  IO_LOGE("DiscoverAndPairDevice: CMD 03 no response — device {} has a different key, factory reset required", deviceID);
+                  if (inserted)
+                    sDeviceMap.erase(deviceID);
+                  result = PairResult::FAILED_KEY_MISMATCH;
+                }
               }
             }
           }

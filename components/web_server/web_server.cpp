@@ -3366,7 +3366,8 @@ static void pairing_task(void *)
     for (int attempt = 0; attempt < MAX_ATTEMPTS && s_pairing_active; attempt++)
     {
         result = s_manager->mIoHome->DiscoverAndPairDevice();
-        if (result == iohome::PairResult::PAIRED_FULL) break;
+        // A device answered: success, or a key mismatch that rescanning won't fix
+        if (result != iohome::PairResult::FAILED_NO_RESPONSE) break;
         // FAILED_NO_RESPONSE: keep scanning, broadcast liveness heartbeat every ~5 attempts
         if (++heartbeat_counter >= 5) {
             heartbeat_counter = 0;
@@ -3374,7 +3375,11 @@ static void pairing_task(void *)
         }
     }
     s_pairing_active = false;
-    if (result != iohome::PairResult::PAIRED_FULL) {
+    if (result == iohome::PairResult::FAILED_KEY_MISMATCH) {
+        ESP_LOGW(TAG, "Pairing failed: device holds a different key, factory reset required");
+        web_server_broadcast_message("{\"type\":\"pair_failed\",\"status\":\"key_mismatch\"}");
+        pair_log_append("PAIR_2W - FAILED (key mismatch)");
+    } else if (result == iohome::PairResult::FAILED_NO_RESPONSE) {
         ESP_LOGW(TAG, "Pairing timed out after 120 s");
         web_server_broadcast_message("{\"type\":\"pair_failed\",\"status\":\"timeout\"}");
         pair_log_append("PAIR_2W - FAILED");
