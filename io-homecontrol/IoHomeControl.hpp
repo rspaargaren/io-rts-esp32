@@ -155,6 +155,16 @@ namespace iohome
     /// @brief Current preamble policy.
     PreamblePolicy GetPreamblePolicy() const { return mPreamblePolicy; }
 
+    /// @brief Defer all status polls (ETA, periodic, confirmation) until ReleaseStatusPolls().
+    /// @details Reference-counted. Use around a burst of commands (e.g. a group action) so the
+    ///          status task does not grab the radio between them. Polls that fall due while held
+    ///          are not lost - their timestamps stay overdue and run once the hold is released.
+    ///          A hold older than STATUS_POLL_HOLD_MAX_US is ignored so a leak cannot starve polls.
+    void HoldStatusPolls();
+
+    /// @brief Release a hold taken with HoldStatusPolls().
+    void ReleaseStatusPolls();
+
     /// @brief Forget everything learned about which devices need a wake-up burst.
     /// @note Use between A/B runs so one policy's learning does not colour the next.
     void ResetPreambleLearning();
