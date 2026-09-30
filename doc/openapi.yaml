@@ -1,0 +1,1103 @@
+openapi: 3.0.3
+info:
+  title: io-rts-esp32 Web API
+  description: >
+    HTTP + WebSocket API exposed by the io-rts-esp32 firmware's built-in web server
+    (components/web_server/web_server.cpp). Consumed by the web_data_v2 frontend.
+  version: "1.0.0"
+servers:
+  - url: http://{host}
+    variables:
+      host:
+        default: io-rts-esp32.local
+
+security:
+  - OtaKeyHeader: []
+  - OtaKeyQuery: []
+
+tags:
+  - name: Devices
+  - name: Remotes
+  - name: Pairing & Learning
+  - name: Somfy / Overkiz
+  - name: IO-homecontrol Radio
+  - name: MQTT
+  - name: Network
+  - name: WiFi
+  - name: Syslog
+  - name: OTA & Firmware
+  - name: System
+  - name: WebSocket
+
+paths:
+  /api/devices:
+    get:
+      tags: [Devices]
+      summary: List all paired devices
+      responses:
+        "200":
+          description: Array of devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Device" }
+
+  /api/remotes:
+    get:
+      tags: [Remotes]
+      summary: List all remotes and their linked devices
+      responses:
+        "200":
+          description: Array of remotes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Remote" }
+
+  /api/action:
+    post:
+      tags: [Devices, Remotes]
+      summary: Generic device/remote action dispatch
+      description: >
+        Single endpoint used for nearly all mutations (movement, rename, pairing,
+        linking, calibration, device-type/manufacturer edits, etc.). The set of
+        accepted fields depends on `action`. See `AnyActionRequest` for the union
+        of all known actions.
+      security:
+        - OtaKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnyActionRequest" }
+      responses:
+        "200":
+          description: Result of the action (or `{success, deviceId}` for `pair1w`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiResult"
+                  - $ref: "#/components/schemas/PairResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/download/devices:
+    get:
+      tags: [Devices]
+      summary: Download raw devices storage file
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200": { description: Devices file (implementation-defined JSON) }
+
+  /api/download/remotes:
+    get:
+      tags: [Remotes]
+      summary: Download raw remotes storage file
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200": { description: Remotes file (implementation-defined JSON) }
+
+  /api/upload/devices:
+    post:
+      tags: [Devices]
+      summary: Upload/replace the devices storage file
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/upload/remotes:
+    post:
+      tags: [Remotes]
+      summary: Upload/replace the remotes storage file
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/upload/iohomecontrol:
+    post:
+      tags: [IO-homecontrol Radio]
+      summary: Upload IO-homecontrol config JSON (radio key/node id/tx power etc.)
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { type: object } }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/pair/start:
+    post:
+      tags: [Pairing & Learning]
+      summary: Start listening for a Somfy 2W pairing broadcast (CMD 28)
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          description: Started/busy status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/pair/status:
+    get:
+      tags: [Pairing & Learning]
+      summary: Poll pairing-listener activity
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActiveResponse" }
+
+  /api/learn/start:
+    post:
+      tags: [Pairing & Learning]
+      summary: Start learning the IO-homecontrol system key from a controller
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+        "400":
+          description: Passive mode is enabled (must be disabled first)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { message: { type: string } }
+
+  /api/learn/stop:
+    post:
+      tags: [Pairing & Learning]
+      summary: Stop the key-learn listener
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/learn/status:
+    get:
+      tags: [Pairing & Learning]
+      summary: Poll key-learn activity
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActiveResponse" }
+
+  /api/pair-device/start:
+    post:
+      tags: [Pairing & Learning]
+      summary: Emulate a new actuator so a controller (e.g. TaHoma) shares its key
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/pair-device/stop:
+    post:
+      tags: [Pairing & Learning]
+      summary: Stop pair-as-device emulation
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/pair-device/status:
+    get:
+      tags: [Pairing & Learning]
+      summary: Poll pair-as-device activity
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActiveResponse" }
+
+  /api/send-key/start:
+    post:
+      tags: [Pairing & Learning]
+      summary: Observe/respond to a CMD 28 broadcast as controller (step-by-step key share)
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/send-key/stop:
+    post:
+      tags: [Pairing & Learning]
+      summary: Stop the send-key observer
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/send-key/status:
+    get:
+      tags: [Pairing & Learning]
+      summary: Poll send-key observer activity
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActiveResponse" }
+
+  /api/remote/capture/start:
+    post:
+      tags: [Remotes]
+      summary: Open a 30s window to capture the ID of the next remote button press
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/remote/capture/cancel:
+    post:
+      tags: [Remotes]
+      summary: Cancel an in-progress remote capture window
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/somfy/credentials:
+    get:
+      tags: [Somfy / Overkiz]
+      summary: Get whether Overkiz/TaHoma credentials are configured (password never returned)
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured: { type: boolean }
+                  email: { type: string }
+    post:
+      tags: [Somfy / Overkiz]
+      summary: Save Overkiz/TaHoma cloud credentials
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/somfy/import:
+    post:
+      tags: [Somfy / Overkiz]
+      summary: Log into Overkiz and list ACTUATOR devices available for import
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          description: Array of importable Somfy devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string, description: "6-hex-char device id" }
+                    name: { type: string }
+                    already_added: { type: boolean }
+
+  /api/somfy/add:
+    post:
+      tags: [Somfy / Overkiz]
+      summary: Add selected imported Somfy devices as local IO-homecontrol devices
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                required: [id]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/io/key:
+    get:
+      tags: [IO-homecontrol Radio]
+      summary: Get the IO-homecontrol system key
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  { key: { type: string, description: "32-char hex" } }
+    post:
+      tags: [IO-homecontrol Radio]
+      summary: Set the IO-homecontrol system key (requires reboot)
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                {
+                  key:
+                    {
+                      type: string,
+                      description: "must be exactly 32 hex chars",
+                    },
+                }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/io/sniff:
+    get:
+      tags: [IO-homecontrol Radio]
+      summary: Get key-sniffing status/result
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active: { type: boolean }
+                  key: { type: string, nullable: true }
+    post:
+      tags: [IO-homecontrol Radio]
+      summary: Start/stop passive key sniffing
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [active]
+              properties: { active: { type: boolean } }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/io/config:
+    get:
+      tags: [IO-homecontrol Radio]
+      summary: Get radio node id / tx power / passive mode
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node_id: { type: string, description: "6-hex-char" }
+                  tx_power: { type: integer, minimum: 0, maximum: 20 }
+                  passive_mode: { type: boolean }
+    post:
+      tags: [IO-homecontrol Radio]
+      summary: Update radio node id / tx power / passive mode
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                node_id:
+                  { type: string, description: "must be exactly 6 hex chars" }
+                tx_power: { type: integer, minimum: 0, maximum: 20 }
+                passive_mode: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/mqtt:
+    get:
+      tags: [MQTT]
+      summary: Get MQTT configuration and connection status
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MqttConfig" }
+    post:
+      tags: [MQTT]
+      summary: Update MQTT configuration (restarts client if any field changed)
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user: { type: string }
+                server: { type: string }
+                password: { type: string }
+                client_id: { type: string }
+                topic: { type: string }
+                discovery: { type: string }
+                port: { type: integer }
+                enabled: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/network/config:
+    get:
+      tags: [Network]
+      summary: Get static/DHCP network configuration and actual runtime IP info
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NetworkConfig" }
+    post:
+      tags: [Network]
+      summary: Update network configuration (reboot required to apply)
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hostname: { type: string }
+                dhcp: { type: boolean }
+                ip: { type: string }
+                mask: { type: string }
+                gateway: { type: string }
+                dns1: { type: string }
+                dns2: { type: string }
+                sntp: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/wifi/config:
+    get:
+      tags: [WiFi]
+      summary: Get the currently stored WiFi SSID (password never returned)
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ssid: { type: string } }
+    post:
+      tags: [WiFi]
+      summary: Set WiFi SSID/password and reboot
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ssid]
+              properties:
+                ssid: { type: string }
+                password:
+                  {
+                    type: string,
+                    description: "omit to keep existing password",
+                  }
+      responses:
+        "200":
+          description: Restart acknowledgement
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, enum: [restarting] } }
+        "400":
+          description: Missing/empty ssid
+
+  /api/wifi/fallback:
+    get:
+      tags: [WiFi]
+      summary: Get WiFi fallback-AP configuration/state
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WifiFallbackConfig" }
+    post:
+      tags: [WiFi]
+      summary: Update WiFi fallback-AP configuration (applied immediately)
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                retries_boot: { type: integer, minimum: 1, maximum: 20 }
+                retries_running: { type: integer, minimum: 1, maximum: 20 }
+                ap_timeout_s: { type: integer, maximum: 3600 }
+                ap_ssid: { type: string, maxLength: 32 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+
+  /api/wifi/scan:
+    get:
+      tags: [WiFi]
+      summary: Scan for nearby WiFi access points
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          description: Array of up to 30 access points
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    ssid: { type: string }
+                    rssi: { type: integer }
+                    auth:
+                      {
+                        type: integer,
+                        description: "wifi_auth_mode_t enum value",
+                      }
+
+  /api/syslog:
+    get:
+      tags: [Syslog]
+      summary: Get syslog configuration
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyslogConfig" }
+    post:
+      tags: [Syslog]
+      summary: Update syslog configuration
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SyslogConfig" }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/syslog/ping:
+    post:
+      tags: [Syslog]
+      summary: Test reachability/latency of the configured syslog server
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+
+  /api/misc/password:
+    post:
+      tags: [System]
+      summary: Set or clear the web UI access password (reboot required)
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  {
+                    type: string,
+                    minLength: 0,
+                    maxLength: 32,
+                    description: "empty string clears the password; 1-7 chars is rejected",
+                  }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/ota:
+    post:
+      tags: [OTA & Firmware]
+      summary: Upload firmware binary (*-firmware.bin) and reboot into it
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, enum: [rebooting] } }
+        "400":
+          description: Empty payload or wrong file (bad magic byte)
+        "500":
+          description: OTA begin/write/verify/boot-set failed
+
+  /api/ota/web:
+    post:
+      tags: [OTA & Firmware]
+      summary: Overwrite the entire "web" LittleFS partition with a pre-built image, then reboot
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, enum: [rebooting] } }
+        "500":
+          description: Partition not found, erase failed, or write failed
+
+  /api/ota/url:
+    post:
+      tags: [OTA & Firmware]
+      summary: Fetch firmware or web image directly from a URL and flash it (avoids browser CORS issues)
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+                type: { type: string, enum: [firmware, web], default: firmware }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/ota/key:
+    get:
+      tags: [OTA & Firmware]
+      summary: Get the current OTA/API key
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  { key: { type: string, description: "32-char key" } }
+    post:
+      tags: [OTA & Firmware]
+      summary: Set a new OTA/API key
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties: { key: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/upload/web{path}:
+    post:
+      tags: [System]
+      summary: Upload a single web asset file to LittleFS (used by upload_web.sh)
+      description: Registered as wildcard route `/api/upload/web*`; actual target path passed via `?path=`.
+      security: [{ OtaKeyHeader: [] }]
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema: { type: string }
+          description: Not a real path template — see `path` query parameter.
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+          description: Absolute destination path under the web root, e.g. `/js/app.js.gz`. Must not contain `..`.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+        "400":
+          description: Missing/invalid `path`
+
+  /api/backup:
+    get:
+      tags: [System]
+      summary: Download a full JSON backup (devices, credentials, settings)
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200":
+          description: Backup file, served with Content-Disposition attachment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupFile" }
+
+  /api/restore:
+    post:
+      tags: [System]
+      summary: Restore devices/credentials/settings from a backup file
+      security: [{ OtaKeyHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupFile" }
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/factory-reset:
+    post:
+      tags: [System]
+      summary: Erase all NVS namespaces and stored devices, then reboot
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/reboot:
+    post:
+      tags: [System]
+      summary: Reboot the device
+      security: [{ OtaKeyHeader: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/ApiResultResponse" }
+
+  /api/info:
+    get:
+      tags: [System]
+      summary: Get firmware/board/web-asset version info
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  project: { type: string }
+                  compile_date: { type: string }
+                  compile_time: { type: string }
+                  idf_ver: { type: string }
+                  board: { type: string }
+                  web_version: { type: string }
+
+  /api/info/fs:
+    get:
+      tags: [System]
+      summary: Get LittleFS "web" partition usage
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  used: { type: integer }
+                  free: { type: integer }
+
+  /api/debug:
+    get:
+      tags: [System]
+      summary: Get internal debug/diagnostic state
+      responses:
+        "200":
+          description: Implementation-defined debug snapshot
+          content:
+            application/json: { schema: { type: object } }
+
+components:
+  securitySchemes:
+    OtaKeyHeader:
+      type: apiKey
+      in: header
+      name: X-OTA-Key
+      description: >
+        Required for all mutating/sensitive endpoints. Constant-time compared
+        against the stored OTA key.
+    OtaKeyQuery:
+      type: apiKey
+      in: query
+      name: _key
+      description: Fallback for proxies that strip custom headers.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid X-OTA-Key
+    ApiResultResponse:
+      description: Generic success/failure result
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiResult" }
+
+  schemas:
+    ApiResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        message: { type: string }
+
+    PairResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        deviceId:
+          { type: string, description: "id of the newly paired 1W device" }
+
+    StatusResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [started, stopped, busy, cancelled] }
+
+    ActiveResponse:
+      type: object
+      properties:
+        active: { type: boolean }
+
+    Device:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        somfy_name: { type: string, description: "2W devices only" }
+        inactive: { type: boolean }
+        position: { type: integer, description: "0-100, or -1 if unknown" }
+        tilt:
+          { type: integer, description: "0-100, or -1 if unknown/unsupported" }
+        type: { type: integer, description: "IO-homecontrol device type enum" }
+        type_name: { type: string }
+        subtype: { type: integer }
+        manufacturer: { type: string }
+        manufacturer_id: { type: integer }
+        is_low_power: { type: boolean }
+        is_stopped: { type: boolean }
+        is_inverted: { type: boolean }
+        is_quiet: { type: boolean }
+        tilt_supported: { type: boolean }
+        transit_time_ms: { type: integer }
+        protocol: { type: string, enum: ["1w", "2w"] }
+        position_estimated:
+          {
+            type: boolean,
+            description: "true for 1W devices (no position feedback)",
+          }
+        info1_hex: { type: string, description: "2W devices only" }
+        info2_hex: { type: string, description: "2W devices only" }
+        info1_serial: { $ref: "#/components/schemas/DeviceSerial" }
+        info2_serial: { $ref: "#/components/schemas/DeviceSerial" }
+
+    DeviceSerial:
+      type: object
+      description: 2W devices only — decoded Velocet serial fields
+      properties:
+        node_id: { type: string }
+        oem_id: { type: string }
+        year: { type: string }
+        week: { type: string }
+
+    Remote:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string, description: "currently always equal to id" }
+        devices:
+          type: array
+          items: { type: string }
+          description: linked device ids
+
+    AnyActionRequest:
+      type: object
+      required: [action]
+      description: >
+        Fields required/used vary by `action`. `deviceId` is required for all
+        device-scoped actions; `remoteId` for remote-scoped actions.
+      properties:
+        action:
+          type: string
+          enum:
+            - open
+            - close
+            - stop
+            - position
+            - tilt
+            - identify
+            - invertOpenClose
+            - setQuiet
+            - rename
+            - setSomfyName
+            - linkRemote
+            - unlinkRemote
+            - deleteRemote
+            - addRemote
+            - deactivateDevice
+            - reactivateDevice
+            - deleteDevice
+            - sendpair1w
+            - wink1w
+            - sendremove1w
+            - unpair1w
+            - pair1w
+            - resetPosition1w
+            - setTransitTime
+            - calibrate
+            - cancelCalibration
+            - setDeviceType
+            - setManufacturer
+        deviceId: { type: string }
+        remoteId: { type: string, description: "6-hex-char remote id" }
+        value:
+          description: >
+            Meaning depends on action: 0-100 for `position`/`tilt`, boolean for
+            `setQuiet`, string for `rename`/`setSomfyName` (via a nested `value`
+            field), 0 or 100 for `resetPosition1w`, seconds (0-300) for
+            `setTransitTime`, device-type code (0-0x18) for `setDeviceType`,
+            manufacturer code (0-0x0C) for `setManufacturer`.
+          oneOf:
+            - type: number
+            - type: string
+            - type: boolean
+        name: { type: string, description: "device name, used by `pair1w`" }
+        deviceType: { type: integer, description: "used by `pair1w`" }
+        manufacturer:
+          { type: integer, description: "used by `pair1w`, default SOMFY" }
+
+    MqttConfig:
+      type: object
+      properties:
+        user: { type: string }
+        server: { type: string }
+        port: { type: integer }
+        password: { type: string }
+        client_id: { type: string }
+        topic: { type: string }
+        discovery: { type: string }
+        connected: { type: boolean }
+        enabled: { type: boolean }
+        status: { type: string }
+
+    NetworkConfig:
+      type: object
+      properties:
+        hostname: { type: string }
+        dhcp: { type: boolean }
+        ip: { type: string }
+        mask: { type: string }
+        gateway: { type: string }
+        dns1: { type: string }
+        dns2: { type: string }
+        sntp: { type: string }
+        actual_ip: { type: string }
+        actual_mask: { type: string }
+        actual_gateway: { type: string }
+        actual_dns1: { type: string }
+
+    WifiFallbackConfig:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        retries_boot: { type: integer }
+        retries_running: { type: integer }
+        ap_timeout_s: { type: integer }
+        ap_ssid: { type: string }
+        ap_running: { type: boolean }
+        connected: { type: boolean }
+
+    SyslogConfig:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        server: { type: string }
+        port: { type: integer }
+        facility: { type: integer }
+        min_level: { type: integer }
+        id: { type: string }
+        format: { type: string, enum: ["3164", "5424"] }
+
+    BackupFile:
+      type: object
+      properties:
+        format: { type: string, enum: ["io-rts-backup"] }
+        format_version: { type: integer }
+        created: { type: string, format: date-time }
+        firmware_version: { type: string }
+        devices:
+          type: array
+          items:
+            {
+              type: object,
+              description: "StoredIoDevice JSON (device + linked_remotes)",
+            }
+        credentials:
+          type: object
+          properties:
+            ota_key: { type: string }
+            io_system_key: { type: string }
+            mqtt_password: { type: string }
+        settings:
+          type: object
+          properties:
+            mqtt: { type: object }
+            syslog: { type: object }
+            network: { type: object }
+            io: { type: object }
