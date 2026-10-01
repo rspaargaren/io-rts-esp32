@@ -505,17 +505,6 @@ namespace IoRts
                     ESP_LOGI(TAG, "Migrated 1W seq for %s to NVS: 0x%04X", deviceID.c_str(), dev.info.sequence_1w);
                 }
 
-                const uint8_t routeTypn = iohome::BroadcastRouteTypnFor1W(dev.info.device_type);
-                if (routeTypn != 0 && dev.info.device_subtype == 0)
-                {
-                    dev.info.device_subtype = routeTypn;
-                    Helpers::StoredIoDevice patched = storedDevice;
-                    patched.device = dev;
-                    Helpers::DeviceStorage::SaveIoDevice(deviceID, patched);
-                    ESP_LOGW(TAG,
-                             "1W %s: set broadcast typn %u (was 0). Put motor in pairing mode and Resend Pair (0x30).",
-                             deviceID.c_str(), routeTypn);
-                }
             }
 
             // Add to our local map regardless of active/inactive state
@@ -978,7 +967,8 @@ namespace IoRts
         strncpy(info.name, name.c_str(), sizeof(info.name) - 1);
         info.device_type     = type;
         info.manufacturer    = manufacturer;
-        info.device_subtype  = iohome::BroadcastRouteTypnFor1W(type);
+        // cridp default "type":[0] → 00:00:3F; set device_subtype manually/import if needed
+        info.device_subtype  = 0;
         info.is_low_power    = true;
 
         if (!mIo1W->PairDevice(info))

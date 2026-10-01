@@ -57,17 +57,18 @@ void Io1WControl::BuildBroadcastTarget(uint8_t dest[NODE_ID_SIZE], const IoDevic
 
 void Io1WControl::TransmitFrame4x(const IoFrame &frame) const
 {
-    // Queue frames one at a time with a 350 ms gap between enqueues.
-    // process_radio_task skips its waitTime whenever sTxIoQueue is non-empty,
-    // so all 4 frames would be dequeued back-to-back: each Send() calls Standby()
-    // which kills the previous frame's preamble after ~1 ms.  The 1024-byte
-    // preamble takes ~213 ms to transmit, so we must keep the queue at most 1
-    // entry deep until the current transmission is complete.
+    // cridp: 4 repeats, 40 ms apart; first burst uses long preamble, repeats short.
+    // Space enqueues so the long preamble (~200 ms+) can finish before the next TX.
+    static constexpr int kRepeatGapMs = 40;
+    static constexpr int kAfterLongPreambleMs = 280;
+
     for (int i = 0; i < 4; i++)
     {
-        mIoHome->TransmitFrame(frame, FREQUENCY_CHANNEL_2, LONG_PREAMBLE_LENGTH);
+        const uint16_t preamble =
+            (i == 0) ? LONG_PREAMBLE_LENGTH : SHORT_PREAMBLE_LENGTH;
+        mIoHome->TransmitFrame(frame, FREQUENCY_CHANNEL_2, preamble);
         if (i < 3)
-            vTaskDelay(pdMS_TO_TICKS(350));
+            vTaskDelay(pdMS_TO_TICKS(i == 0 ? kAfterLongPreambleMs : kRepeatGapMs));
     }
 }
 
