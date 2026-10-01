@@ -14,45 +14,22 @@ static const char *TAG = "Io1WControl";
 namespace iohome
 {
 
-// Cmd 0x00 payload[1]: vendor-specific ACEI on the wire (not the Manufacturer enum).
-// See iohc-flipper vendor table: Somfy 0x43, Velux 0x61.
-static uint8_t aceiByteFor1wExecute(Manufacturer manufacturer)
-{
-    switch (manufacturer)
-    {
-    case Manufacturer::VELUX:
-        return 0x61;
-    case Manufacturer::SOMFY:
-        return 0x43;
-    default:
-        return 0x43;
-    }
-}
-
-// Velux 1W remotes set CTRL1_LOW_POWER only for goto-position mains (0x0001–0xC800).
-// Open (0x0000), STOP (0xD200), and button codes keep CTRL1 0x00 on air.
-static bool ctrl1LowPowerFor1wExecute(const IoDeviceInformation &info, uint16_t main_val)
-{
-    switch (info.manufacturer)
-    {
-    case Manufacturer::VELUX:
-        return main_val > 0 && main_val <= 0xC800u;
-    default:
-        return info.is_low_power;
-    }
-}
+// cridp/iohcRemote1W always uses ACEI 0x43 on cmd 0x00 (see old/src/iohcRemote1W.cpp).
+// Physical OEM remotes may show 0x61 on-air; motors paired via this stack expect 0x43.
+static constexpr uint8_t ACEI_1W_EXECUTE = 0x43;
 
 Io1WControl::Io1WControl(IoHomeControl *io_home)
     : mIoHome(io_home)
 {
 }
 
-void Io1WControl::BuildBroadcastTarget(uint8_t dest[NODE_ID_SIZE], DeviceType) const
+void Io1WControl::BuildBroadcastTarget(uint8_t dest[NODE_ID_SIZE], const IoDeviceInformation &info) const
 {
-    // All 1W frames use the global broadcast address. The HMAC selects the device.
+    // cridp forgePacket: target = (typn << 6) | 0x3F; typn stored as device_subtype / JSON "type"[0].
+    const uint16_t bcast = (static_cast<uint16_t>(info.device_subtype) << 6) | 0x3Fu;
     dest[0] = 0x00;
-    dest[1] = 0x00;
-    dest[2] = 0x3F;
+    dest[1] = static_cast<uint8_t>(bcast >> 8);
+    dest[2] = static_cast<uint8_t>(bcast & 0xFF);
 }
 
 void Io1WControl::TransmitFrame4x(const IoFrame &frame) const
@@ -74,7 +51,9 @@ void Io1WControl::TransmitFrame4x(const IoFrame &frame) const
 bool Io1WControl::ReSendPair(IoDeviceInformation &info)
 {
     const uint8_t *src = info.node_id;
-    const uint8_t dest[NODE_ID_SIZE] = {0x00, 0x00, 0x3F};
+
+    uint8_t dest[NODE_ID_SIZE];
+    BuildBroadcastTarget(dest, info);
 
     uint8_t seq[2] = {(uint8_t)(info.sequence_1w >> 8), (uint8_t)(info.sequence_1w & 0xFF)};
     info.sequence_1w++;
@@ -118,7 +97,7 @@ bool Io1WControl::WinkDevice(IoDeviceInformation &info)
     const uint8_t *src = info.node_id;
 
     uint8_t dest[NODE_ID_SIZE];
-    BuildBroadcastTarget(dest, info.device_type);
+    BuildBroadcastTarget(dest, info);
 
     uint8_t seq[2] = {(uint8_t)(info.sequence_1w >> 8), (uint8_t)(info.sequence_1w & 0xFF)};
     info.sequence_1w++;
@@ -152,7 +131,7 @@ bool Io1WControl::UnpairDevice(IoDeviceInformation &info)
     const uint8_t *src = info.node_id;
 
     uint8_t dest[NODE_ID_SIZE];
-    BuildBroadcastTarget(dest, info.device_type);
+    BuildBroadcastTarget(dest, info);
 
     uint8_t seq[2] = {(uint8_t)(info.sequence_1w >> 8), (uint8_t)(info.sequence_1w & 0xFF)};
     info.sequence_1w++;
@@ -185,7 +164,7 @@ bool Io1WControl::Send(IoDeviceInformation &info, float position_pct)
     const uint8_t *src = info.node_id;
 
     uint8_t dest[NODE_ID_SIZE];
-    BuildBroadcastTarget(dest, info.device_type);
+    BuildBroadcastTarget(dest, info);
 
     uint8_t seq[2] = {(uint8_t)(info.sequence_1w >> 8), (uint8_t)(info.sequence_1w & 0xFF)};
     info.sequence_1w++;
@@ -193,7 +172,7 @@ bool Io1WControl::Send(IoDeviceInformation &info, float position_pct)
     // main = position_pct * 512 (0x0000 = fully open, 0xC800 = fully closed)
     uint16_t main_val = (uint16_t)roundf(position_pct * 512.0f);
     uint8_t  origin   = 0x01;
-    uint8_t  acei     = aceiByteFor1wExecute(info.manufacturer);
+    uint8_t  acei     = ACEI_1W_EXECUTE;
 
     uint8_t frame_for_hmac[7] = {
         0x00, origin, acei,
@@ -219,8 +198,7 @@ bool Io1WControl::Send(IoDeviceInformation &info, float position_pct)
     memcpy(&params[8], hmac, HMAC_SIZE);
 
     IoFrame frame;
-    init_frame(frame, false /*1W*/, true, true,
-               ctrl1LowPowerFor1wExecute(info, main_val));
+    init_frame(frame, false /*1W*/, true, true, true);
     set_destination(frame, dest);
     set_source(frame, src);
     set_command(frame, 0x00, params, sizeof(params));
@@ -233,14 +211,14 @@ bool Io1WControl::Stop(IoDeviceInformation &info)
     const uint8_t *src = info.node_id;
 
     uint8_t dest[NODE_ID_SIZE];
-    BuildBroadcastTarget(dest, info.device_type);
+    BuildBroadcastTarget(dest, info);
 
     uint8_t seq[2] = {(uint8_t)(info.sequence_1w >> 8), (uint8_t)(info.sequence_1w & 0xFF)};
     info.sequence_1w++;
 
     constexpr uint16_t STOP_VAL = 0xD200;
     uint8_t  origin = 0x01;
-    uint8_t  acei   = aceiByteFor1wExecute(info.manufacturer);
+    uint8_t  acei   = ACEI_1W_EXECUTE;
 
     uint8_t frame_for_hmac[7] = {
         0x00, origin, acei,
@@ -265,8 +243,7 @@ bool Io1WControl::Stop(IoDeviceInformation &info)
     memcpy(&params[8], hmac, HMAC_SIZE);
 
     IoFrame frame;
-    init_frame(frame, false /*1W*/, true, true,
-               ctrl1LowPowerFor1wExecute(info, STOP_VAL));
+    init_frame(frame, false /*1W*/, true, true, true);
     set_destination(frame, dest);
     set_source(frame, src);
     set_command(frame, 0x00, params, sizeof(params));

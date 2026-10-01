@@ -47,7 +47,7 @@ public:
     bool Stop(IoDeviceInformation &info);
 
 private:
-    void BuildBroadcastTarget(uint8_t dest[NODE_ID_SIZE], DeviceType type) const;
+    void BuildBroadcastTarget(uint8_t dest[NODE_ID_SIZE], const IoDeviceInformation &info) const;
     void TransmitFrame4x(const IoFrame &frame) const;
 
     IoHomeControl *mIoHome;

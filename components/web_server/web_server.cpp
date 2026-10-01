@@ -2455,12 +2455,15 @@ static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
             dev.info.sequence_1w = 1;
         }
 
-        // The iohomecontrol "type" field is a broadcast-target routing code {0,0},
-        // not the io-homecontrol DeviceType enum — the two numbering systems are
-        // unrelated. Default to ROLLER_SHUTTER so the UI shows open/close/stop/
-        // position controls for all imported devices. The user can adjust per-device
-        // if needed. A numeric "device_type" override is still accepted for tools
-        // that export the correct enum value.
+        // cridp "type" is a broadcast routing index (forgePacket typn), not DeviceType.
+        // Store type[0] in device_subtype; default typn 0 → destination 00:00:3F.
+        cJSON *typeRouteArr = cJSON_GetObjectItem(entry, "type");
+        if (cJSON_IsArray(typeRouteArr) && cJSON_GetArraySize(typeRouteArr) > 0) {
+            cJSON *route0 = cJSON_GetArrayItem(typeRouteArr, 0);
+            if (cJSON_IsNumber(route0))
+                dev.info.device_subtype = (uint8_t)route0->valuedouble;
+        }
+
         cJSON *typeOverride = cJSON_GetObjectItem(entry, "device_type");
         dev.info.device_type = cJSON_IsNumber(typeOverride)
             ? static_cast<iohome::DeviceType>((uint8_t)typeOverride->valuedouble)

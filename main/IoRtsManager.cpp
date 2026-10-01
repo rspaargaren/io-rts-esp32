@@ -953,8 +953,9 @@ namespace IoRts
         info.protocol_mode = iohome::ProtocolMode::PROTO_1W;
         memcpy(info.node_id, rand_id, iohome::NODE_ID_SIZE);
         strncpy(info.name, name.c_str(), sizeof(info.name) - 1);
-        info.device_type  = type;
-        info.manufacturer = manufacturer;
+        info.device_type     = type;
+        info.manufacturer    = manufacturer;
+        info.device_subtype  = 0; // cridp broadcast typn 0 → 00:00:3F
 
         if (!mIo1W->PairDevice(info))
         {
