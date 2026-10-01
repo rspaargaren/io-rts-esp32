@@ -14,6 +14,34 @@ static const char *TAG = "Io1WControl";
 namespace iohome
 {
 
+// Cmd 0x00 payload[1]: vendor-specific ACEI on the wire (not the Manufacturer enum).
+// See iohc-flipper vendor table: Somfy 0x43, Velux 0x61.
+static uint8_t aceiByteFor1wExecute(Manufacturer manufacturer)
+{
+    switch (manufacturer)
+    {
+    case Manufacturer::VELUX:
+        return 0x61;
+    case Manufacturer::SOMFY:
+        return 0x43;
+    default:
+        return 0x43;
+    }
+}
+
+// Velux 1W remotes set CTRL1_LOW_POWER only for goto-position mains (0x0001–0xC800).
+// Open (0x0000), STOP (0xD200), and button codes keep CTRL1 0x00 on air.
+static bool ctrl1LowPowerFor1wExecute(const IoDeviceInformation &info, uint16_t main_val)
+{
+    switch (info.manufacturer)
+    {
+    case Manufacturer::VELUX:
+        return main_val > 0 && main_val <= 0xC800u;
+    default:
+        return info.is_low_power;
+    }
+}
+
 Io1WControl::Io1WControl(IoHomeControl *io_home)
     : mIoHome(io_home)
 {
@@ -165,7 +193,7 @@ bool Io1WControl::Send(IoDeviceInformation &info, float position_pct)
     // main = position_pct * 512 (0x0000 = fully open, 0xC800 = fully closed)
     uint16_t main_val = (uint16_t)roundf(position_pct * 512.0f);
     uint8_t  origin   = 0x01;
-    uint8_t  acei     = 0x43;
+    uint8_t  acei     = aceiByteFor1wExecute(info.manufacturer);
 
     uint8_t frame_for_hmac[7] = {
         0x00, origin, acei,
@@ -191,7 +219,8 @@ bool Io1WControl::Send(IoDeviceInformation &info, float position_pct)
     memcpy(&params[8], hmac, HMAC_SIZE);
 
     IoFrame frame;
-    init_frame(frame, false /*1W*/, true, true, true);
+    init_frame(frame, false /*1W*/, true, true,
+               ctrl1LowPowerFor1wExecute(info, main_val));
     set_destination(frame, dest);
     set_source(frame, src);
     set_command(frame, 0x00, params, sizeof(params));
@@ -211,7 +240,7 @@ bool Io1WControl::Stop(IoDeviceInformation &info)
 
     constexpr uint16_t STOP_VAL = 0xD200;
     uint8_t  origin = 0x01;
-    uint8_t  acei   = 0x43;
+    uint8_t  acei   = aceiByteFor1wExecute(info.manufacturer);
 
     uint8_t frame_for_hmac[7] = {
         0x00, origin, acei,
@@ -236,7 +265,8 @@ bool Io1WControl::Stop(IoDeviceInformation &info)
     memcpy(&params[8], hmac, HMAC_SIZE);
 
     IoFrame frame;
-    init_frame(frame, false /*1W*/, true, true, true);
+    init_frame(frame, false /*1W*/, true, true,
+               ctrl1LowPowerFor1wExecute(info, STOP_VAL));
     set_destination(frame, dest);
     set_source(frame, src);
     set_command(frame, 0x00, params, sizeof(params));
