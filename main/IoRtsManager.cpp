@@ -967,7 +967,7 @@ namespace IoRts
         strncpy(info.name, name.c_str(), sizeof(info.name) - 1);
         info.device_type     = type;
         info.manufacturer    = manufacturer;
-        // cridp default "type":[0] → 00:00:3F; set device_subtype manually/import if needed
+        // Default broadcast typn 0 → 00:00:3F; override device_subtype via import or set1wBroadcastRoute
         info.device_subtype  = 0;
         info.is_low_power    = true;
 

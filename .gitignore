@@ -100,6 +100,9 @@ web-portalcontext.md
 # Tools
 tools/console_probe.py
 
+# Local reference copy (not part of this project)
+old/
+
 # Local implementation prompts (kept out of repo)
 *-prompt.md
 prompts/

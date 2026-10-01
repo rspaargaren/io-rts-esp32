@@ -14,32 +14,8 @@ static const char *TAG = "Io1WControl";
 namespace iohome
 {
 
-// cridp/iohcRemote1W always uses ACEI 0x43 on cmd 0x00 (see old/src/iohcRemote1W.cpp).
-// Physical OEM remotes may show 0x61 on-air; motors paired via this stack expect 0x43.
+// 1W cmd 0x00 uses ACEI 0x43 on the wire (OEM remotes may use other values e.g. 0x61).
 static constexpr uint8_t ACEI_1W_EXECUTE = 0x43;
-
-uint8_t BroadcastRouteTypnFor1W(DeviceType device_type)
-{
-    switch (device_type)
-    {
-    case DeviceType::WINDOW_OPENER:
-    case DeviceType::VENTILATION_POINT:
-        return 2; // 00:00:BF (Velux window / ventilation pairing route)
-    case DeviceType::ROLLER_SHUTTER:
-    case DeviceType::AWNING:
-    case DeviceType::BLIND:
-    case DeviceType::VENETIAN_BLIND:
-    case DeviceType::EXTERNAL_VENETIAN_BLIND:
-    case DeviceType::LOUVRE_BLIND:
-    case DeviceType::SWINGING_SHUTTER:
-    case DeviceType::DUAL_SHUTTER:
-    case DeviceType::HORIZONTAL_AWNING:
-    case DeviceType::CURTAIN_TRACK:
-        return 3; // 00:00:FF (shutter / blind pairing route)
-    default:
-        return 0; // 00:00:3F (cridp default — all types)
-    }
-}
 
 Io1WControl::Io1WControl(IoHomeControl *io_home)
     : mIoHome(io_home)
@@ -48,7 +24,7 @@ Io1WControl::Io1WControl(IoHomeControl *io_home)
 
 void Io1WControl::BuildBroadcastTarget(uint8_t dest[NODE_ID_SIZE], const IoDeviceInformation &info) const
 {
-    // cridp forgePacket: target = (typn << 6) | 0x3F; typn stored as device_subtype / JSON "type"[0].
+    // 1W broadcast destination: (typn << 6) | 0x3F; typn is device_subtype (import JSON "type"[0]).
     const uint16_t bcast = (static_cast<uint16_t>(info.device_subtype) << 6) | 0x3Fu;
     dest[0] = 0x00;
     dest[1] = static_cast<uint8_t>(bcast >> 8);
@@ -57,7 +33,7 @@ void Io1WControl::BuildBroadcastTarget(uint8_t dest[NODE_ID_SIZE], const IoDevic
 
 void Io1WControl::TransmitFrame4x(const IoFrame &frame) const
 {
-    // cridp: 4 repeats, 40 ms apart; first burst uses long preamble, repeats short.
+    // Four repeats: first TX long preamble, then short preamble, ~40 ms between repeats.
     // Space enqueues so the long preamble (~200 ms+) can finish before the next TX.
     static constexpr int kRepeatGapMs = 40;
     static constexpr int kAfterLongPreambleMs = 280;

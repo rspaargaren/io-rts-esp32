@@ -169,7 +169,7 @@ namespace iohome
 
         /// Encrypt the per-device 1W key for the ADD (0x30) packet.
         /// AES-128-CFB128 with TRANSFER_KEY; IV from the virtual 1W remote node_id
-        /// (source address in the pair frame), matching cridp/iohcRemote1W.
+        /// (source address in the pair frame).
         bool encrypt_1w_key(
             const uint8_t virtual_remote_node_id[NODE_ID_SIZE],
             const uint8_t key_in[AES_KEY_SIZE],

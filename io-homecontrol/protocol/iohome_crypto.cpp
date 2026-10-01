@@ -9,7 +9,6 @@
 
 // https://mbed-tls.readthedocs.io/en/latest/getting_started/psa/
 #include "psa/crypto.h"
-#include "mbedtls/aes.h"
 
 #include "esp_log.h"
 static const char *TAG = "io-crypto";
@@ -294,7 +293,7 @@ namespace iohome
         const uint8_t key_in[AES_KEY_SIZE],
         uint8_t enc_key_out[AES_KEY_SIZE])
     {
-      // IV = virtual 1W remote address repeated (cridp encrypt_1W_key / old stack).
+      // IV = virtual 1W remote node_id repeated in the 16-byte block.
       uint8_t iv[AES_BLOCK_SIZE] = {};
       for (int i = 0; i < 13; i += 3)
       {
@@ -304,24 +303,13 @@ namespace iohome
       }
       iv[15] = virtual_remote_node_id[0];
 
-      uint8_t plain[AES_KEY_SIZE];
-      memcpy(plain, key_in, AES_KEY_SIZE);
-
-      mbedtls_aes_context aes;
-      mbedtls_aes_init(&aes);
-      if (mbedtls_aes_setkey_enc(&aes, TRANSFER_KEY, 128) != 0)
-      {
-        mbedtls_aes_free(&aes);
+      // Single-block CFB128 encrypt == plaintext XOR AES-ECB(TRANSFER_KEY, IV).
+      uint8_t keystream[AES_BLOCK_SIZE];
+      if (!aes128_encrypt(iv, TRANSFER_KEY, keystream))
         return false;
-      }
-
-      size_t iv_off = 0;
-      uint8_t iv_work[AES_BLOCK_SIZE];
-      memcpy(iv_work, iv, sizeof(iv_work));
-      int ret = mbedtls_aes_crypt_cfb128(
-          &aes, MBEDTLS_AES_ENCRYPT, AES_KEY_SIZE, &iv_off, iv_work, plain, enc_key_out);
-      mbedtls_aes_free(&aes);
-      return ret == 0;
+      for (int i = 0; i < AES_KEY_SIZE; i++)
+        enc_key_out[i] = key_in[i] ^ keystream[i];
+      return true;
     }
 
   } // namespace crypto

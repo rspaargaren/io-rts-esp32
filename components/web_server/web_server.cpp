@@ -831,7 +831,7 @@ static esp_err_t api_action_post(httpd_req_t *req)
             }
         }
     } else if (strcmp(action, "set1wBroadcastRoute") == 0) {
-        // cridp JSON "type"[0]: (typn<<6)|0x3F — 0=00003F, 2=0000BF, 3=0000FF, etc.
+        // 1W broadcast typn (device_subtype): (typn<<6)|0x3F — 0=00003F, 2=0000BF, 3=0000FF, etc.
         if (strlen(deviceId) > 0 && value >= 0 && value <= 15) {
             {
                 std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
@@ -2477,7 +2477,7 @@ static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
             dev.info.sequence_1w = 1;
         }
 
-        // cridp "type" is a broadcast routing index (forgePacket typn), not DeviceType.
+        // Import "type"[0] is 1W broadcast typn, not the io-homecontrol DeviceType enum.
         // Store type[0] in device_subtype; default typn 0 → destination 00:00:3F.
         cJSON *typeRouteArr = cJSON_GetObjectItem(entry, "type");
         if (cJSON_IsArray(typeRouteArr) && cJSON_GetArraySize(typeRouteArr) > 0) {
