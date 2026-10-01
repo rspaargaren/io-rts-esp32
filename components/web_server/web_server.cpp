@@ -816,14 +816,22 @@ static esp_err_t api_action_post(httpd_req_t *req)
                 std::lock_guard<std::mutex> lock(s_manager->mIoDevicesMutex);
                 auto it = s_manager->mIoDevices.find(deviceId);
                 if (it != s_manager->mIoDevices.end()) {
-                    it->second.info.device_type = static_cast<iohome::DeviceType>((uint8_t)value);
+                    auto newType = static_cast<iohome::DeviceType>((uint8_t)value);
+                    it->second.info.device_type = newType;
+                    if (it->second.info.protocol_mode == iohome::ProtocolMode::PROTO_1W)
+                        it->second.info.device_subtype =
+                            iohome::BroadcastRouteTypnFor1W(newType);
                     ok = true;
                 }
             }
             if (ok) {
                 Helpers::StoredIoDevice stored;
                 if (Helpers::DeviceStorage::LoadIoDevice(deviceId, stored) == ESP_OK) {
-                    stored.device.info.device_type = static_cast<iohome::DeviceType>((uint8_t)value);
+                    auto newType = static_cast<iohome::DeviceType>((uint8_t)value);
+                    stored.device.info.device_type = newType;
+                    if (stored.device.info.protocol_mode == iohome::ProtocolMode::PROTO_1W)
+                        stored.device.info.device_subtype =
+                            iohome::BroadcastRouteTypnFor1W(newType);
                     Helpers::DeviceStorage::SaveIoDevice(deviceId, stored);
                 }
             }
@@ -2468,6 +2476,13 @@ static esp_err_t api_upload_iohomecontrol(httpd_req_t *req)
         dev.info.device_type = cJSON_IsNumber(typeOverride)
             ? static_cast<iohome::DeviceType>((uint8_t)typeOverride->valuedouble)
             : iohome::DeviceType::ROLLER_SHUTTER;
+
+        if (dev.info.device_subtype == 0)
+        {
+            const uint8_t routeTypn = iohome::BroadcastRouteTypnFor1W(dev.info.device_type);
+            if (routeTypn != 0)
+                dev.info.device_subtype = routeTypn;
+        }
 
         // manufacturer
         cJSON *mfItem = cJSON_GetObjectItem(entry, "manufacturer_id");

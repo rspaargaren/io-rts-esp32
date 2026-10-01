@@ -18,6 +18,29 @@ namespace iohome
 // Physical OEM remotes may show 0x61 on-air; motors paired via this stack expect 0x43.
 static constexpr uint8_t ACEI_1W_EXECUTE = 0x43;
 
+uint8_t BroadcastRouteTypnFor1W(DeviceType device_type)
+{
+    switch (device_type)
+    {
+    case DeviceType::WINDOW_OPENER:
+    case DeviceType::VENTILATION_POINT:
+        return 2; // 00:00:BF (Velux window / ventilation pairing route)
+    case DeviceType::ROLLER_SHUTTER:
+    case DeviceType::AWNING:
+    case DeviceType::BLIND:
+    case DeviceType::VENETIAN_BLIND:
+    case DeviceType::EXTERNAL_VENETIAN_BLIND:
+    case DeviceType::LOUVRE_BLIND:
+    case DeviceType::SWINGING_SHUTTER:
+    case DeviceType::DUAL_SHUTTER:
+    case DeviceType::HORIZONTAL_AWNING:
+    case DeviceType::CURTAIN_TRACK:
+        return 3; // 00:00:FF (shutter / blind pairing route)
+    default:
+        return 0; // 00:00:3F (cridp default — all types)
+    }
+}
+
 Io1WControl::Io1WControl(IoHomeControl *io_home)
     : mIoHome(io_home)
 {
@@ -78,8 +101,10 @@ bool Io1WControl::ReSendPair(IoDeviceInformation &info)
     set_source(frame, src);
     set_command(frame, 0x30, params, sizeof(params));
     TransmitFrame4x(frame);
-    ESP_LOGI(TAG, "ReSendPair: ADD (0x30) sent from %02X%02X%02X seq=%04X",
-             src[0], src[1], src[2], (seq[0] << 8) | seq[1]);
+    ESP_LOGI(TAG,
+             "ReSendPair: ADD (0x30) from %02X%02X%02X to %02X%02X%02X typn=%u man=0x%02X seq=%04X",
+             src[0], src[1], src[2], dest[0], dest[1], dest[2],
+             info.device_subtype, params[16], (seq[0] << 8) | seq[1]);
     return true;
 }
 

@@ -162,6 +162,13 @@ namespace Helpers
         if (cJSON_IsString(protoItem) && strcmp(protoItem->valuestring, "1w") == 0)
         {
             dev.info.protocol_mode = iohome::ProtocolMode::PROTO_1W;
+            if (dev.info.node_id[0] == 0 && dev.info.node_id[1] == 0 && dev.info.node_id[2] == 0
+                && deviceID.length() == 6)
+            {
+                for (int i = 0; i < iohome::NODE_ID_SIZE; i++)
+                    dev.info.node_id[i] =
+                        (uint8_t)strtol(deviceID.substr(i * 2, 2).c_str(), nullptr, 16);
+            }
             cJSON *seqItem = cJSON_GetObjectItem(obj, "sequence");
             if (cJSON_IsString(seqItem))
                 dev.info.sequence_1w = (uint16_t)strtoul(seqItem->valuestring, nullptr, 16);

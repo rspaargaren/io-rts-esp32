@@ -13,6 +13,10 @@ namespace iohome
 /// existing IoHomeControl instance. Each command is sent 4 times on CH2 with a
 /// long preamble (LPM=1). The source address in every frame is info.node_id —
 /// each 1W device has its own virtual remote address, matching cridp's design.
+/// cridp "type"[0] / forgePacket typn: (typn << 6) | 0x3F → 1W broadcast destination.
+/// Velux pairing often requires typn 3 (00:00:FF) for shutters vs 0 (00:00:3F).
+uint8_t BroadcastRouteTypnFor1W(DeviceType device_type);
+
 class Io1WControl
 {
 public:
