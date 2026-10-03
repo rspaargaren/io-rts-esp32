@@ -40,14 +40,14 @@ namespace iohome
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
     /// @return true on success
-    bool create_getstatus03_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+    bool create_getstatus03_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power);
 
     /// @brief Create a GetStatus IO Frame (0x03) with tilt info request
     /// @param frame Output IoFrame structure
     /// @param own_node_id Source node ID (3 bytes)
     /// @param dst_node_id Destination node ID (3 bytes) for output frame to create
     /// @return true on success
-    bool create_getstatus03_tilt_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id);
+    bool create_getstatus03_tilt_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power);
 
     /// @brief Create a Discovery IO Frame (0x28)
     /// @param frame Output IoFrame structure
@@ -211,7 +211,7 @@ namespace iohome
     /// @param dst_node_id Destination node ID (3 bytes)
     /// @param function_id Private function ID: 0x06 = battery-status, 0x09 = battery-state
     /// @return true on success
-    bool create_getbattery_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t function_id);
+    bool create_getbattery_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, uint8_t function_id, bool is_low_power);
 
     /// @brief Create a status update response IO Frame (0x72)
     /// @param frame Output IoFrame structure

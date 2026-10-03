@@ -13,6 +13,7 @@
 
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
 #include "esp_wifi.h"
+#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #endif
@@ -131,6 +132,7 @@ namespace Helpers
     static uint64_t sFallbackApTimerStartUs = 0;
     static esp_timer_handle_t sReconnectTimer   = nullptr;
     static esp_netif_t *sApNetif = nullptr;
+    static uint8_t sLastStaChannel = 0; // channel of the last AP we associated with
 
     // Runtime config loaded from NVS, defaults to Kconfig values
     static bool        sCfgFallbackEnabled  = CONFIG_WIFI_FALLBACK_AP_ENABLED;
@@ -171,29 +173,40 @@ namespace Helpers
         if (sFallbackApRunning) { vTaskDelete(nullptr); return; }
         ESP_LOGI(TAG, "Starting fallback AP (APSTA mode)");
 
-        esp_wifi_set_mode(WIFI_MODE_APSTA);
-
         wifi_config_t ap_cfg = {};
         strncpy((char *)ap_cfg.ap.ssid, sCfgApSsid.c_str(), sizeof(ap_cfg.ap.ssid) - 1);
         ap_cfg.ap.ssid_len        = (uint8_t)sCfgApSsid.length();
-        ap_cfg.ap.channel         = 1;
+        ap_cfg.ap.channel         = sLastStaChannel ? sLastStaChannel : 1;
         ap_cfg.ap.max_connection  = 4;
         ap_cfg.ap.beacon_interval = 200;
         std::string ap_pwd = Config::MiscConfig::GetEffectiveAccessPassword();
-        if (ap_pwd.length() >= 8) {
+        bool ap_secured = (ap_pwd.length() >= 8);
+        if (ap_secured) {
             ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
             strncpy((char *)ap_cfg.ap.password, ap_pwd.c_str(), sizeof(ap_cfg.ap.password) - 1);
         } else {
             ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
-            ESP_LOGW(TAG, "CLI password < 8 chars — fallback AP is OPEN");
+            ESP_LOGW(TAG, "CLI password < 8 chars — fallback AP is OPEN; "
+                          "anyone in range can reach the provisioning portal");
         }
-        esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+        // The AP interface must be enabled before it can be configured:
+        // esp_wifi_set_config(WIFI_IF_AP) returns ESP_ERR_WIFI_MODE in STA-only mode
+        // and the softAP would come up with default SSID/auth.
+        esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+        if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Fallback AP setup failed: %s", esp_err_to_name(err));
+            esp_wifi_set_mode(WIFI_MODE_STA);
+            vTaskDelete(nullptr);
+            return;
+        }
 
         Helpers::WifiProvision::StartProvisionServer(true);
         Helpers::WifiProvision::StartDnsServer();
 
         sFallbackApRunning = true;
-        ESP_LOGI(TAG, "Fallback AP started: SSID=io-rts-setup (WPA2)");
+        ESP_LOGI(TAG, "Fallback AP started: SSID=%s (%s)",
+                 sCfgApSsid.c_str(), ap_secured ? "WPA2" : "OPEN");
 
 #if CONFIG_OLED_ENABLED
         oled_show_status("WiFi:io-rts-setup");
@@ -260,6 +273,35 @@ namespace Helpers
         if (!ssid.empty()) sCfgApSsid = ssid;
     }
 
+    static const char *disconnect_reason_name(uint8_t r)
+    {
+        switch (r) {
+            case WIFI_REASON_AUTH_EXPIRE:            return "AUTH_EXPIRE";
+            case WIFI_REASON_DISASSOC_DUE_TO_INACTIVITY: return "DISASSOC_DUE_TO_INACTIVITY (AP kicked us)";
+            case WIFI_REASON_ASSOC_TOOMANY:          return "ASSOC_TOOMANY (AP client limit)";
+            case WIFI_REASON_ASSOC_NOT_AUTHED:       return "ASSOC_NOT_AUTHED";
+            case WIFI_REASON_MIC_FAILURE:            return "MIC_FAILURE (wrong PSK)";
+            case WIFI_REASON_ASSOC_LEAVE:            return "ASSOC_LEAVE";
+            case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: return "4WAY_HANDSHAKE_TIMEOUT (wrong PSK?)";
+            case WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT: return "GROUP_KEY_UPDATE_TIMEOUT";
+            case WIFI_REASON_IE_IN_4WAY_DIFFERS:     return "IE_IN_4WAY_DIFFERS";
+            case WIFI_REASON_GROUP_CIPHER_INVALID:   return "GROUP_CIPHER_INVALID";
+            case WIFI_REASON_PAIRWISE_CIPHER_INVALID: return "PAIRWISE_CIPHER_INVALID";
+            case WIFI_REASON_AKMP_INVALID:           return "AKMP_INVALID";
+            case WIFI_REASON_802_1X_AUTH_FAILED:     return "802_1X_AUTH_FAILED";
+            case WIFI_REASON_NO_AP_FOUND:            return "NO_AP_FOUND";
+            case WIFI_REASON_AUTH_FAIL:              return "AUTH_FAIL";
+            case WIFI_REASON_ASSOC_FAIL:             return "ASSOC_FAIL";
+            case WIFI_REASON_HANDSHAKE_TIMEOUT:      return "HANDSHAKE_TIMEOUT";
+            case WIFI_REASON_CONNECTION_FAIL:        return "CONNECTION_FAIL";
+            case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY: return "NO_AP_W_COMPATIBLE_SECURITY";
+            case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD: return "NO_AP_IN_AUTHMODE_THRESHOLD";
+            case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:     return "NO_AP_IN_RSSI_THRESHOLD";
+            case WIFI_REASON_ROAMING:                return "ROAMING";
+            default:                                 return "see esp_wifi_types.h";
+        }
+    }
+
     static void reconnect_timer_cb(void *)
     {
         esp_wifi_connect();
@@ -282,6 +324,12 @@ namespace Helpers
         else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED)
         {
             sIsConnected = false;
+            wifi_event_sta_connected_t *evt = (wifi_event_sta_connected_t *)event_data;
+            wifi_ap_record_t ap;
+            int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
+            ESP_LOGI(TAG, "Associated: bssid " MACSTR " ch %d authmode %d aid %d rssi %d dBm",
+                     MAC2STR(evt->bssid), evt->channel, (int)evt->authmode, evt->aid, rssi);
+            sLastStaChannel = evt->channel;
             set_ip_from_configuration();
         }
         else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
@@ -290,9 +338,16 @@ namespace Helpers
             wifi_event_sta_disconnected_t *evt = (wifi_event_sta_disconnected_t *)event_data;
             sLastDisconnectReason = evt->reason;
             sWifiRetryCount++;
-            int delay_ms = (sWifiRetryCount <= 3) ? 10000 : 30000;
-            ESP_LOGW(TAG, "WiFi disconnected (reason %d), retry %d in %ds",
-                     evt->reason, sWifiRetryCount, delay_ms / 1000);
+            // Backoff ladder: retry quickly at first (most dropouts are transient),
+            // then stretch out so a long router outage doesn't hammer the radio.
+            int delay_ms;
+            if      (sWifiRetryCount <= 2) delay_ms =  5000;
+            else if (sWifiRetryCount <= 4) delay_ms = 10000;
+            else if (sWifiRetryCount <= 6) delay_ms = 20000;
+            else                           delay_ms = 30000;
+            ESP_LOGW(TAG, "WiFi disconnected from " MACSTR " (reason %d = %s, rssi %d), retry %d in %ds",
+                     MAC2STR(evt->bssid), evt->reason, disconnect_reason_name(evt->reason),
+                     evt->rssi, sWifiRetryCount, delay_ms / 1000);
             esp_timer_stop(sReconnectTimer); // cancel any pending reconnect before rescheduling
             esp_timer_start_once(sReconnectTimer, (uint64_t)delay_ms * 1000);
         }
@@ -323,13 +378,32 @@ namespace Helpers
         memcpy(&wifi_config.sta.password, wifi_pwd.c_str(),
                wifi_pwd.length() <= sizeof(wifi_config.sta.password) ? wifi_pwd.length() : sizeof(wifi_config.sta.password));
         wifi_config.sta.threshold.authmode = NetworkConfig::GetWifiAuthModeThreshold();
+        // Scan every channel and pick the strongest BSSID for this SSID. The IDF
+        // default (fast scan) associates with the first match found, which on a
+        // mesh/multi-AP network can be a distant node while a near one sits idle.
+        wifi_config.sta.scan_method       = WIFI_ALL_CHANNEL_SCAN;
+        wifi_config.sta.sort_method       = WIFI_CONNECT_AP_BY_SIGNAL;
+        wifi_config.sta.threshold.rssi    = CONFIG_WIFI_STA_MIN_RSSI;
+        wifi_config.sta.failure_retry_cnt = 3; // fall through to the next BSS in the list
         wifi_config.sta.sae_pwe_h2e = NetworkConfig::GetWifiSAEMode();
         memcpy(&wifi_config.sta.sae_h2e_identifier, wifi_pwid.c_str(),
                wifi_pwid.length() <= sizeof(wifi_config.sta.sae_h2e_identifier) ? wifi_pwid.length() : sizeof(wifi_config.sta.sae_h2e_identifier));
 #ifdef CONFIG_ESP_WIFI_WPA3_COMPATIBLE_SUPPORT
         wifi_config.sta.disable_wpa3_compatible_mode = 0;
 #endif
+        // Credentials diagnostic: quoted SSID exposes stray whitespace, and the
+        // password length tells us whether NVS holds what we think it holds.
+        ESP_LOGI(TAG, "STA config: ssid='%s' (%u chars), psk %u chars, "
+                      "authmode threshold %d, min rssi %d, sae_id %u chars",
+                 wifi_ssid.c_str(), (unsigned)wifi_ssid.length(), (unsigned)wifi_pwd.length(),
+                 (int)wifi_config.sta.threshold.authmode, (int)wifi_config.sta.threshold.rssi,
+                 (unsigned)wifi_pwid.length());
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        // Mains-powered controller: disable modem sleep. The IDF default
+        // (WIFI_PS_MIN_MODEM) makes the STA doze between DTIM beacons, which is the
+        // usual cause of spurious beacon-timeout disconnects (reason 200) on APs
+        // that do 802.11k/v/r or have short client-idle timeouts.
+        ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
         ESP_ERROR_CHECK(esp_wifi_start());
     }
 
@@ -353,13 +427,16 @@ namespace Helpers
                                                             s_netif,
                                                             NULL));
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-        set_wifi_from_configuration();
-        load_fallback_config();
 
+        // Must exist before esp_wifi_start(), otherwise a disconnect arriving during
+        // the first association attempt finds a null handle and schedules no retry.
         esp_timer_create_args_t ra = {};
         ra.callback = reconnect_timer_cb;
         ra.name     = "wifi_reconnect";
         esp_timer_create(&ra, &sReconnectTimer);
+
+        load_fallback_config();
+        set_wifi_from_configuration();
     }
 #endif // CONFIG_CONNECTIVITY_CHOICE_WIFI
 #ifdef CONFIG_CONNECTIVITY_CHOICE_ETH

@@ -8,6 +8,7 @@
 #include "esp_console.h"
 #include "esp_log.h"
 #include <esp_timer.h>
+#include <strings.h>
 
 using namespace Config;
 
@@ -20,9 +21,19 @@ static iohome::IoHomeControl *sIoHome;
 static int do_iodiscover_cmd(int argc, char **argv)
 {
     auto result = sIoHome->DiscoverAndPairDevice();
-    if (result == iohome::PairResult::FAILED_NO_RESPONSE)
+    switch (result)
+    {
+    case iohome::PairResult::PAIRED_FULL:
+    case iohome::PairResult::PAIRED_SHORTCUT_VERIFIED:
+        return 0;
+    case iohome::PairResult::FAILED_KEY_MISMATCH:
+        ESP_LOGE(TAG, "Discover failed — device holds a different key, factory reset required");
+        return 1;
+    case iohome::PairResult::FAILED_NO_RESPONSE:
+    default:
         ESP_LOGW(TAG, "Discover failed — no device responded");
-    return 0;
+        return 1;
+    }
 }
 
 static void register_iodiscover(void)
@@ -1299,6 +1310,100 @@ static void register_io1wsend(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
 
+// ******************* IO PREAMBLE POLICY ********************
+
+static struct
+{
+    struct arg_str *policy;
+    struct arg_int *bytes;
+    struct arg_end *end;
+} iopreamble_args;
+
+static int do_iopreamble_cmd(int argc, char **argv)
+{
+    auto name = [](iohome::PreamblePolicy p) -> const char *
+    {
+        switch (p)
+        {
+        case iohome::PreamblePolicy::ADAPTIVE:   return "adaptive";
+        case iohome::PreamblePolicy::WAKE_FIRST: return "wakefirst";
+        case iohome::PreamblePolicy::LEGACY:     return "legacy";
+        }
+        return "?";
+    };
+
+    int nerrors = arg_parse(argc, argv, (void **)&iopreamble_args);
+    if (nerrors != 0 || iopreamble_args.policy->count == 0)
+    {
+        ESP_LOGI(TAG, "preamble policy: %s, normal preamble %u B",
+                 name(sIoHome->GetPreamblePolicy()), (unsigned)sIoHome->GetNormalPreambleLength());
+        ESP_LOGI(TAG, "  adaptive       - per-device preamble ladder (normal / 4x normal / wake-up burst), climbs on misses");
+        ESP_LOGI(TAG, "  wakefirst      - wake-up burst on a cold request, ladder within the awake window (5 s)");
+        ESP_LOGI(TAG, "  legacy         - CTRL1_LOW_POWER bit decides (pre-existing behaviour)");
+        ESP_LOGI(TAG, "  reset          - forget what has been learned so far");
+        ESP_LOGI(TAG, "  normal <bytes> - set the awake-device preamble (reference controller implies ~17-36 B)");
+        if (nerrors != 0 && iopreamble_args.policy->count != 0)
+            arg_print_errors(stderr, iopreamble_args.end, argv[0]);
+        return 0;
+    }
+
+    const char *arg = iopreamble_args.policy->sval[0];
+    if (strcasecmp(arg, "normal") == 0)
+    {
+        if (iopreamble_args.bytes->count == 0)
+        {
+            ESP_LOGI(TAG, "normal preamble is %u B (%u ms). Usage: io_preamble normal <bytes>",
+                     (unsigned)sIoHome->GetNormalPreambleLength(),
+                     (unsigned)(sIoHome->GetNormalPreambleLength() * 8u * 1000u / 38400u));
+            return 0;
+        }
+        sIoHome->SetNormalPreambleLength((uint16_t)iopreamble_args.bytes->ival[0]);
+        sIoHome->ResetPreambleLearning();
+        ESP_LOGI(TAG, "normal preamble now %u B (learning reset)", (unsigned)sIoHome->GetNormalPreambleLength());
+        return 0;
+    }
+    if (strcasecmp(arg, "reset") == 0)
+    {
+        sIoHome->ResetPreambleLearning();
+        ESP_LOGI(TAG, "preamble learning reset; policy stays %s", name(sIoHome->GetPreamblePolicy()));
+        return 0;
+    }
+
+    iohome::PreamblePolicy policy;
+    if (strcasecmp(arg, "adaptive") == 0)
+        policy = iohome::PreamblePolicy::ADAPTIVE;
+    else if (strcasecmp(arg, "wakefirst") == 0)
+        policy = iohome::PreamblePolicy::WAKE_FIRST;
+    else if (strcasecmp(arg, "legacy") == 0)
+        policy = iohome::PreamblePolicy::LEGACY;
+    else
+    {
+        ESP_LOGE(TAG, "Unknown policy '%s'. Use: adaptive / wakefirst / legacy / reset / normal <bytes>", arg);
+        return 1;
+    }
+
+    sIoHome->SetPreamblePolicy(policy);
+    sIoHome->ResetPreambleLearning(); // so the previous policy's learning does not colour this run
+    ESP_LOGI(TAG, "preamble policy: %s (learning reset)", name(policy));
+    return 0;
+}
+
+static void register_iopreamble(void)
+{
+    iopreamble_args.policy = arg_str0(NULL, NULL, "<policy>", "adaptive / wakefirst / legacy / reset / normal (omit to show current)");
+    iopreamble_args.bytes  = arg_int0(NULL, NULL, "<bytes>", "preamble length in bytes, for 'normal'");
+    iopreamble_args.end    = arg_end(3);
+    const esp_console_cmd_t cmd = {
+        .command = "io_preamble",
+        .help    = "Show or set how the TX preamble is chosen (A/B the 213 ms wake-up burst)",
+        .hint    = NULL,
+        .func    = &do_iopreamble_cmd,
+        .argtable = &iopreamble_args,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
 // ******************* IO Register commands ********************
 
 void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
@@ -1333,4 +1438,5 @@ void register_io_cmdline_tools(IoRts::IoRtsManager *io_rts_manager)
     register_io1wpair();
     register_io1wunpair();
     register_io1wsend();
+    register_iopreamble();
 }

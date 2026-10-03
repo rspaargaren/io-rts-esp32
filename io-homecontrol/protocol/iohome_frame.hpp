@@ -126,6 +126,16 @@ namespace iohome
     return (frame.ctrl_byte_0 & CTRL0_END) != 0;
   }
 
+  /// @brief Get 'low power' flag value from IoFrame
+  /// @param frame IoFrame structure
+  /// @return true if 'low power' flag is set, false otherwise
+  /// @note Destination is a duty-cycled (solar/battery) receiver and needs a long
+  ///       wake-up preamble. Mains-powered devices listen continuously.
+  inline bool is_low_power(const IoFrame &frame)
+  {
+    return (frame.ctrl_byte_1 & CTRL1_LOW_POWER) != 0;
+  }
+
   /**
    * @brief Get protocol mode (1W/2W) from IoFrame
    * @param frame IoFrame structure
