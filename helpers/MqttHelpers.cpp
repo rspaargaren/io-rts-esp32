@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <vector>
+#include <deque>
+#include <cinttypes>
 
 #include "cJSON.h"
 
@@ -77,11 +79,24 @@ static constexpr UBaseType_t MQTT_CMD_QUEUE_DEPTH = 64;
 // straggler before releasing the hold.
 static constexpr TickType_t MQTT_CMD_BURST_GRACE_MS = 250;
 
+// A command the device did not authenticate (radio exchange failed after all SendAndReceive
+// attempts) goes to the back of the line and is sent again, at most this many times.
+static constexpr uint8_t MQTT_CMD_MAX_REQUEUES = 2;
+
+// Minimum delay before a requeued command is sent again. Fresh commands still go first; this only
+// matters when the requeued command is the last one left, so it doesn't hit a busy channel at once.
+static constexpr TickType_t MQTT_CMD_REQUEUE_DELAY_MS = 1000;
+
+// "Queue full" drops are logged at most once per this interval; the rest are counted into the next
+// line so a flood of commands can't flood syslog as well.
+static constexpr int64_t MQTT_CMD_DROP_LOG_INTERVAL_US = 1'000'000;
+
 // Command packet sent through mCommandQueue — keeps the MQTT callback non-blocking.
 struct MqttCmd {
     char    device_id[7]; // 6 hex chars + null terminator
     Helpers::MqttHelpers::MqttCmdType type;
     float   value;        // used for POSITION and TILT commands
+    uint8_t requeues;     // times this command has been sent to the back of the line after failing
 };
 
 namespace Helpers
@@ -579,28 +594,167 @@ namespace Helpers
         return IoHomeConfig::isPassiveModeEnabled();
     }
 
+    /// @brief Short name of a command type, for log lines
+    static const char *CmdName(MqttHelpers::MqttCmdType type)
+    {
+        switch (type)
+        {
+            case MqttHelpers::MqttCmdType::OPEN:     return "OPEN";
+            case MqttHelpers::MqttCmdType::CLOSE:    return "CLOSE";
+            case MqttHelpers::MqttCmdType::STOP:     return "STOP";
+            case MqttHelpers::MqttCmdType::ON:       return "ON";
+            case MqttHelpers::MqttCmdType::OFF:      return "OFF";
+            case MqttHelpers::MqttCmdType::LOCK:     return "LOCK";
+            case MqttHelpers::MqttCmdType::UNLOCK:   return "UNLOCK";
+            case MqttHelpers::MqttCmdType::IDENTIFY: return "IDENTIFY";
+            case MqttHelpers::MqttCmdType::POSITION: return "POSITION";
+            case MqttHelpers::MqttCmdType::FAV_POS:  return "FAV_POS";
+            case MqttHelpers::MqttCmdType::TILT:     return "TILT";
+        }
+        return "?";
+    }
+
+    /// @brief true when @p a and @p b drive the same axis of the same device, so the newer one makes the older moot
+    /// @note Tilt is its own axis: a venetian blind gets a position and a tilt command per scene, and one must
+    ///       not cancel the other. IDENTIFY moves nothing for good and never supersedes anything.
+    static bool SameTarget(const MqttCmd &a, const MqttCmd &b)
+    {
+        using T = MqttHelpers::MqttCmdType;
+        if (a.type == T::IDENTIFY || b.type == T::IDENTIFY)
+            return false;
+        return strcmp(a.device_id, b.device_id) == 0 && (a.type == T::TILT) == (b.type == T::TILT);
+    }
+
+    enum class CmdResult { OK, FAILED, REJECTED };
+
+    /// @brief Run one queued command over RF
+    /// @return OK when the device authenticated it, REJECTED when it can never succeed (unknown/inactive
+    ///         device), FAILED otherwise - worth sending again
+    static CmdResult ExecuteCommand(MqttHelpers *self, IoRts::IoRtsManager *mgr, const MqttCmd &cmd)
+    {
+        using T = MqttHelpers::MqttCmdType;
+        const std::string devId(cmd.device_id);
+        bool quiet = false, inverted = false;
+        {
+            std::lock_guard<std::mutex> g(mgr->mIoDevicesMutex);
+            auto it = mgr->mIoDevices.find(devId);
+            if (it == mgr->mIoDevices.end() || it->second.is_deleted)
+                return CmdResult::REJECTED;
+            quiet    = it->second.quiet;
+            inverted = it->second.info.is_openclose_inverted;
+        }
+        // Movement tracking only starts once the device accepted the command - otherwise the
+        // interpolation would report a cover that never moved as "closing", then "closed".
+        bool ok = false;
+        switch (cmd.type)
+        {
+            case T::OPEN:
+                ok = mgr->OpenDevice(devId, quiet);
+                if (ok) mgr->StartMoveTracking(devId, inverted ? 100.0f : 0.0f);
+                break;
+            case T::CLOSE:
+                ok = mgr->CloseDevice(devId, quiet);
+                if (ok) mgr->StartMoveTracking(devId, inverted ? 0.0f : 100.0f);
+                break;
+            case T::STOP:
+                ok = mgr->StopDevice(devId);
+                if (ok && mgr->StopMoveTracking(devId))
+                    self->SendIoDeviceStatus(devId); // publish retained position for 1W (no device feedback)
+                break;
+            case T::ON:
+            case T::UNLOCK:
+                ok = mgr->mIoHome->SetDevicePosition(devId, SWITCH_LIGHT_ON_POSITION);
+                break;
+            case T::OFF:
+            case T::LOCK:
+                ok = mgr->mIoHome->SetDevicePosition(devId, SWITCH_LIGHT_OFF_POSITION);
+                break;
+            case T::IDENTIFY:
+                ok = mgr->mIoHome->IdentifyDevice(devId);
+                break;
+            case T::POSITION:
+                ok = mgr->SetDevicePosition(devId, (uint8_t)cmd.value);
+                if (ok) mgr->StartMoveTracking(devId, cmd.value);
+                break;
+            case T::FAV_POS:
+                ok = mgr->mIoHome->SetDeviceToFavoritePosition(devId);
+                break;
+            case T::TILT:
+                ok = mgr->mIoHome->SetDeviceTilt(devId, (uint8_t)cmd.value);
+                break;
+        }
+        return ok ? CmdResult::OK : CmdResult::FAILED;
+    }
+
     void MqttHelpers::EnqueueCommand(const std::string &deviceId, MqttCmdType type, float value)
     {
         MqttCmd cmd{};
         strncpy(cmd.device_id, deviceId.c_str(), sizeof(cmd.device_id) - 1);
         cmd.type  = type;
         cmd.value = value;
-        if (xQueueSendToBack(mCommandQueue, &cmd, 0) != pdTRUE)
-            ESP_LOGW(TAG, "MQTT command queue full — dropping command for %s", deviceId.c_str());
+        if (xQueueSendToBack(mCommandQueue, &cmd, 0) == pdTRUE)
+            return;
+        // Rate-limited so a flood of commands doesn't also flood syslog. Only the MQTT task
+        // enqueues, so these need no locking.
+        static int64_t sLastDropLogUs = 0;
+        static uint32_t sUnloggedDrops = 0;
+        const int64_t now = esp_timer_get_time();
+        if (sLastDropLogUs != 0 && now - sLastDropLogUs < MQTT_CMD_DROP_LOG_INTERVAL_US)
+        {
+            sUnloggedDrops++;
+            return;
+        }
+        ESP_LOGE(TAG, "MQTT %s for %s DROPPED: command queue full (+%" PRIu32 " more dropped since last report)",
+                 CmdName(type), deviceId.c_str(), sUnloggedDrops);
+        sLastDropLogUs = now;
+        sUnloggedDrops = 0;
     }
 
     void MqttHelpers::MqttCmdWorker(void *arg)
     {
         auto *self = static_cast<MqttHelpers *>(arg);
         auto *mgr  = self->mIoRtsManager;
+        // Failed commands waiting to be sent again, ordered by due time. Owned by this task alone and
+        // kept out of mCommandQueue so a retry never takes a slot from a fresh command, and fresh
+        // commands always go first - a retry joins the back of the line.
+        struct PendingRetry {
+            MqttCmd    cmd;
+            TickType_t due;
+        };
+        std::deque<PendingRetry> retries;
         MqttCmd cmd;
         bool holdingPolls = false;
         while (true)
         {
-            const TickType_t wait = holdingPolls ? pdMS_TO_TICKS(MQTT_CMD_BURST_GRACE_MS) : portMAX_DELAY;
-            if (xQueueReceive(self->mCommandQueue, &cmd, wait) != pdTRUE)
+            TickType_t wait = portMAX_DELAY;
+            if (!retries.empty())
             {
-                if (holdingPolls)
+                const TickType_t left = retries.front().due - xTaskGetTickCount();
+                wait = ((int32_t)left > 0) ? left : 0;
+            }
+            else if (holdingPolls)
+                wait = pdMS_TO_TICKS(MQTT_CMD_BURST_GRACE_MS);
+
+            if (xQueueReceive(self->mCommandQueue, &cmd, wait) == pdTRUE)
+            {
+                // A newer command for the same device and axis makes a pending retry moot - sending
+                // it afterwards would undo what was just asked for.
+                std::erase_if(retries, [&](const PendingRetry &r) {
+                    if (!SameTarget(r.cmd, cmd))
+                        return false;
+                    ESP_LOGW(TAG, "MQTT %s for %s DROPPED: superseded by %s",
+                             CmdName(r.cmd.type), r.cmd.device_id, CmdName(cmd.type));
+                    return true;
+                });
+            }
+            else if (!retries.empty() && (int32_t)(retries.front().due - xTaskGetTickCount()) <= 0)
+            {
+                cmd = retries.front().cmd;
+                retries.pop_front();
+            }
+            else
+            {
+                if (holdingPolls && retries.empty())
                 {
                     mgr->mIoHome->ReleaseStatusPolls(); // burst done — overdue polls run now
                     holdingPolls = false;
@@ -612,64 +766,33 @@ namespace Helpers
                 mgr->mIoHome->HoldStatusPolls();
                 holdingPolls = true;
             }
-            const std::string devId(cmd.device_id);
-            switch (cmd.type)
+
+            // Only exceptions are logged; a normal command adds nothing to syslog.
+            switch (ExecuteCommand(self, mgr, cmd))
             {
-                case MqttCmdType::OPEN:
-                {
-                    bool quiet = false, inverted = false;
+                case CmdResult::OK:
+                    if (cmd.requeues > 0)
+                        ESP_LOGI(TAG, "MQTT %s for %s succeeded on requeue %u",
+                                 CmdName(cmd.type), cmd.device_id, cmd.requeues);
+                    break;
+                case CmdResult::REJECTED:
+                    ESP_LOGW(TAG, "MQTT %s for %s REJECTED: unknown or inactive device",
+                             CmdName(cmd.type), cmd.device_id);
+                    break;
+                case CmdResult::FAILED:
+                    // IDENTIFY jogs the motor - not repeated behind the user's back.
+                    if (cmd.type != MqttCmdType::IDENTIFY && cmd.requeues < MQTT_CMD_MAX_REQUEUES)
                     {
-                        std::lock_guard<std::mutex> g(mgr->mIoDevicesMutex);
-                        auto it = mgr->mIoDevices.find(devId);
-                        if (it != mgr->mIoDevices.end()) {
-                            quiet    = it->second.quiet;
-                            inverted = it->second.info.is_openclose_inverted;
-                        }
+                        cmd.requeues++;
+                        retries.push_back({cmd, xTaskGetTickCount() + pdMS_TO_TICKS(MQTT_CMD_REQUEUE_DELAY_MS)});
+                        ESP_LOGW(TAG, "MQTT %s for %s failed (no authenticated reply), requeued %u/%u",
+                                 CmdName(cmd.type), cmd.device_id, cmd.requeues, MQTT_CMD_MAX_REQUEUES);
                     }
-                    mgr->OpenDevice(devId, quiet);
-                    mgr->StartMoveTracking(devId, inverted ? 100.0f : 0.0f);
-                    break;
-                }
-                case MqttCmdType::CLOSE:
-                {
-                    bool quiet = false, inverted = false;
+                    else
                     {
-                        std::lock_guard<std::mutex> g(mgr->mIoDevicesMutex);
-                        auto it = mgr->mIoDevices.find(devId);
-                        if (it != mgr->mIoDevices.end()) {
-                            quiet    = it->second.quiet;
-                            inverted = it->second.info.is_openclose_inverted;
-                        }
+                        ESP_LOGE(TAG, "MQTT %s for %s DROPPED: no authenticated reply after %u requeues",
+                                 CmdName(cmd.type), cmd.device_id, cmd.requeues);
                     }
-                    mgr->CloseDevice(devId, quiet);
-                    mgr->StartMoveTracking(devId, inverted ? 0.0f : 100.0f);
-                    break;
-                }
-                case MqttCmdType::STOP:
-                    mgr->StopDevice(devId);
-                    if (mgr->StopMoveTracking(devId))
-                        self->SendIoDeviceStatus(devId); // publish retained position for 1W (no device feedback)
-                    break;
-                case MqttCmdType::ON:
-                case MqttCmdType::UNLOCK:
-                    mgr->mIoHome->SetDevicePosition(devId, SWITCH_LIGHT_ON_POSITION);
-                    break;
-                case MqttCmdType::OFF:
-                case MqttCmdType::LOCK:
-                    mgr->mIoHome->SetDevicePosition(devId, SWITCH_LIGHT_OFF_POSITION);
-                    break;
-                case MqttCmdType::IDENTIFY:
-                    mgr->mIoHome->IdentifyDevice(devId);
-                    break;
-                case MqttCmdType::POSITION:
-                    mgr->SetDevicePosition(devId, (uint8_t)cmd.value);
-                    mgr->StartMoveTracking(devId, cmd.value);
-                    break;
-                case MqttCmdType::FAV_POS:
-                    mgr->mIoHome->SetDeviceToFavoritePosition(devId);
-                    break;
-                case MqttCmdType::TILT:
-                    mgr->mIoHome->SetDeviceTilt(devId, (uint8_t)cmd.value);
                     break;
             }
         }

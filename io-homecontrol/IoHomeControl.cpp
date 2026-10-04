@@ -1899,7 +1899,7 @@ namespace iohome
       it->second.move_start_us   = esp_timer_get_time();
       it->second.move_start_pos  = it->second.position;
       it->second.move_target_pos = (float)position;
-      if (create_execute_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, position, quiet) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      if (create_execute_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, position, quiet) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2, -1, true))
       {
         UpdateDeviceStatus(response);
         ret = true;
@@ -1956,7 +1956,7 @@ namespace iohome
       bool ret = false;
       UBaseType_t currentPriority = uxTaskPriorityGet(NULL);
       vTaskPrioritySet(NULL, IO_FRAME_PROCESSING_TASK); // change task priority to higher!
-      if (create_execute_tilt_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, tilt) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      if (create_execute_tilt_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, tilt) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2, -1, true))
       {
         UpdateDeviceStatus(response);
         ret = true;
@@ -2395,7 +2395,8 @@ namespace iohome
   // 2W Mode Features Implementation
   // ============================================================================
 
-  bool IoHomeControl::SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd)
+  bool IoHomeControl::SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd,
+                                     bool require_auth)
   {
     constexpr uint8_t MAX_TRIES = 3;
 
@@ -2415,8 +2416,11 @@ namespace iohome
         continue;
       }
 
+      // An authenticated command only counts once the device has challenged it. Any other frame
+      // from the device (e.g. a late CMD 04 from an earlier exchange) is stashed, not taken as
+      // "no authentication needed" - that would report success for a command it never ran.
       RxFrameQueueItem rxItem;
-      if (!ReceiveMatchingFrame(request.dest_node, request.src_node, -1,
+      if (!ReceiveMatchingFrame(request.dest_node, request.src_node, require_auth ? CMD_CHALLENGE_REQUEST : -1,
                                 response_wait_ticks(preamble), rxItem))
       {
         IO_LOGW("SendAndReceive: didn't receive response! (attempt {}/{}, preamble {} B)",

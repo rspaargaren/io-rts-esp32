@@ -372,8 +372,12 @@ namespace iohome
     /// @param response Response received (only if returning true)
     /// @param frequency Frequency to use to send request
     /// @param expected_response_cmd Expected command in the final response after authentication (-1 = any)
+    /// @param require_auth true for commands the device must authenticate (execute): only a
+    ///                     CMD 3C challenge is accepted as the answer to the request, so a stale frame
+    ///                     from the same device can't pass as success without the command being run
     /// @return true if success (response available), false otherwise.
-    bool SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd = -1);
+    bool SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd = -1,
+                        bool require_auth = false);
 
     /// @brief Manages the authentication process related to received request.
     /// @warning You must take sMutex before calling!
