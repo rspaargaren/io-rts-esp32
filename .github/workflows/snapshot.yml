@@ -60,7 +60,7 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           TAG="${{ github.ref_name }}"
-          TAG="${TAG//\//-}"
+          TAG=$(printf '%s' "$TAG" | tr '/' '-')
           echo "BUILD_TAG=$TAG" >> "$GITHUB_ENV"
           cp build/io-rts-esp32.bin "heltec-${TAG}-firmware.bin"
           cp build/web.bin          "heltec-${TAG}-web.bin"
@@ -110,7 +110,7 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           TAG="${{ github.ref_name }}"
-          TAG="${TAG//\//-}"
+          TAG=$(printf '%s' "$TAG" | tr '/' '-')
           echo "BUILD_TAG=$TAG" >> "$GITHUB_ENV"
           cp build_t3s3/io-rts-esp32.bin "lilygo-t3s3-${TAG}-firmware.bin"
           cp build_t3s3/web.bin          "lilygo-t3s3-${TAG}-web.bin"
@@ -160,7 +160,7 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           TAG="${{ github.ref_name }}"
-          TAG="${TAG//\//-}"
+          TAG=$(printf '%s' "$TAG" | tr '/' '-')
           echo "BUILD_TAG=$TAG" >> "$GITHUB_ENV"
           cp build_lora32/io-rts-esp32.bin "lilygo-lora32-${TAG}-firmware.bin"
           cp build_lora32/web.bin          "lilygo-lora32-${TAG}-web.bin"
