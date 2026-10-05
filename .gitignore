@@ -26,6 +26,10 @@
 # Build artifacts and directories
 **/build/
 build/
+# Per-board build directories (idf.py -B build_<board>)
+build_*/
+.vscode/settings.json
+devices_extracted/
 *.o
 *.a
 *.out
@@ -39,6 +43,10 @@ flasher_args.json # Generated in build directory
 sdkconfig*.old
 sdkconfig
 sdkconfig.heltec
+
+# Local NVS provisioning image — contains secrets (WiFi/MQTT/IO credentials)
+nvs.csv
+nvs.bin
 
 # ESP-IDF dependencies
 dependencies.lock

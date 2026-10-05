@@ -25,7 +25,30 @@ namespace iohome
 
   enum class PairResult {
     PAIRED_FULL,        // full key exchange succeeded (CMD 33 received)
+    PAIRED_SHORTCUT_VERIFIED, // existing shared key verified with CMD 03
+    FAILED_KEY_MISMATCH, // CMD 03 verification failed; factory reset required
     FAILED_NO_RESPONSE  // no CMD 29 received, or key exchange failed — retry
+  };
+
+  /// @brief How the TX preamble for the first leg of an exchange is chosen.
+  /// @note The long preamble is a wake-up burst for duty-cycled receivers and costs 213 ms of
+  ///       airtime at 38400 bps. Retries always escalate to LONG regardless of policy, and the
+  ///       challenge response (leg 2) is always SHORT - the device answered milliseconds ago.
+  enum class PreamblePolicy : uint8_t
+  {
+    /// Probe cold requests with SHORT, escalate to LONG on retry, remember per device.
+    /// Self-correcting: a device that really needs waking costs one extra attempt, then is
+    /// remembered as NEEDS_LONG. Fastest, and the default.
+    ADAPTIVE = 0,
+
+    /// Always wake a cold device with LONG; use SHORT only inside the awake window (a device
+    /// that answered within the last few seconds still has its receiver on). This is the
+    /// conservative reading - first request wakes, the burst that follows runs fast.
+    WAKE_FIRST,
+
+    /// Pre-existing behaviour: the frame's CTRL1_LOW_POWER bit alone decides. Kept so a bad
+    /// experiment can be reverted at runtime without reflashing.
+    LEGACY,
   };
 
   typedef void (*LoggerCallback)(esp_log_level_t log_level, const char *tag, std::string log); // Callback to receive logs from the IO controller (if verbose)
@@ -125,6 +148,33 @@ namespace iohome
 
     /// @brief Change passive mode at runtime without reboot.
     void SetPassiveMode(bool passive) { mPassiveMode = passive; }
+
+    /// @brief Select how the request preamble is chosen. Takes effect on the next exchange.
+    void SetPreamblePolicy(PreamblePolicy policy) { mPreamblePolicy = policy; }
+
+    /// @brief Current preamble policy.
+    PreamblePolicy GetPreamblePolicy() const { return mPreamblePolicy; }
+
+    /// @brief Defer all status polls (ETA, periodic, confirmation) until ReleaseStatusPolls().
+    /// @details Reference-counted. Use around a burst of commands (e.g. a group action) so the
+    ///          status task does not grab the radio between them. Polls that fall due while held
+    ///          are not lost - their timestamps stay overdue and run once the hold is released.
+    ///          A hold older than STATUS_POLL_HOLD_MAX_US is ignored so a leak cannot starve polls.
+    void HoldStatusPolls();
+
+    /// @brief Release a hold taken with HoldStatusPolls().
+    void ReleaseStatusPolls();
+
+    /// @brief Forget everything learned about which devices need a wake-up burst.
+    /// @note Use between A/B runs so one policy's learning does not colour the next.
+    void ResetPreambleLearning();
+
+    /// @brief Preamble used for a device that is awake and listening, in bytes.
+    /// @note Not SHORT_PREAMBLE_LENGTH (8 B) - that proved too short on at least one device.
+    ///       Back-solving the reference controller's inter-frame gaps puts the real figure at
+    ///       ~17-36 bytes. Tunable so the value can be swept on hardware.
+    void SetNormalPreambleLength(uint16_t bytes);
+    uint16_t GetNormalPreambleLength() const;
 
     /// @brief Get Listening status
     /// @return true if listening for incoming frames on radio, false otherwise.
@@ -314,14 +364,20 @@ namespace iohome
     bool mPassiveMode; // true if passive mode (will not send frames to radio, only listening)
     bool mIgnoreAutoUpdate; // true to ignore auto-update flag (0x80) and use timer value instead
 
+    PreamblePolicy mPreamblePolicy = PreamblePolicy::ADAPTIVE; // how the leg-1 preamble is chosen
+
     /// @brief Sends a provided request on specified frequency and provide a response in return. Manages authentication automatically.
     /// @warning You must take sMutex before calling!
     /// @param request Request to send
     /// @param response Response received (only if returning true)
     /// @param frequency Frequency to use to send request
     /// @param expected_response_cmd Expected command in the final response after authentication (-1 = any)
+    /// @param require_auth true for commands the device must authenticate (execute): only a
+    ///                     CMD 3C challenge is accepted as the answer to the request, so a stale frame
+    ///                     from the same device can't pass as success without the command being run
     /// @return true if success (response available), false otherwise.
-    bool SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd = -1);
+    bool SendAndReceive(const IoFrame &request, IoFrame &response, uint32_t frequency, int expected_response_cmd = -1,
+                        bool require_auth = false);
 
     /// @brief Manages the authentication process related to received request.
     /// @warning You must take sMutex before calling!
