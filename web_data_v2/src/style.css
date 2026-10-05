@@ -363,7 +363,6 @@ main::-webkit-scrollbar {
 .card-top {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 4px;
 }
 
