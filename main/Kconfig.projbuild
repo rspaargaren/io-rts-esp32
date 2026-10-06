@@ -147,6 +147,15 @@ menu "IO RTS Project Configuration"
                 bool "WPA3 PSK"
         endchoice
 
+        config WIFI_STA_MIN_RSSI
+            int "Minimum RSSI (dBm) an AP must have to be considered"
+            default -80
+            range -100 0
+            help
+                With an all-channel scan the station picks the strongest BSS that matches the
+                configured SSID. APs weaker than this threshold are skipped entirely.
+                -80 dBm is a reasonable cutoff; lower values (e.g. -90) accept weaker signals.
+
     endmenu
 
     menu "WiFi Fallback AP"

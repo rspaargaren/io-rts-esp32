@@ -17,6 +17,9 @@ export function BlindPane({
   const [lastPct, setLastPct] = useState(
     device.position >= 0 ? device.position : 0,
   );
+  const touchStartY = useRef<number | null>(null);
+  const touchDragging = useRef(false);
+  const DRAG_THRESHOLD = 10;
 
   const pctFromEvent = useCallback((e: MouseEvent | TouchEvent) => {
     if (!paneRef.current) return 0;
@@ -72,19 +75,26 @@ export function BlindPane({
 
     const handleTouchStart = (e: TouchEvent) => {
       if (!paneRef.current) return;
-      setDragging(true);
-      e.preventDefault();
+      touchStartY.current = e.touches[0].clientY;
+      touchDragging.current = false;
       applyDrag(pctFromEvent(e));
     };
 
     const handleTouchMove = (e: TouchEvent) => {
-      if (!dragging) return;
+      if (touchStartY.current === null) return;
+      if (!touchDragging.current) {
+        if (Math.abs(e.touches[0].clientY - touchStartY.current) < DRAG_THRESHOLD) return;
+        touchDragging.current = true;
+        setDragging(true);
+      }
       e.preventDefault();
       applyDrag(pctFromEvent(e));
     };
 
     const handleTouchEnd = () => {
-      if (!dragging) return;
+      if (!touchDragging.current) { touchStartY.current = null; return; }
+      touchStartY.current = null;
+      touchDragging.current = false;
       setDragging(false);
       void commitPosition(lastPct);
     };

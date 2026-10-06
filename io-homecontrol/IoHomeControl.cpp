@@ -26,6 +26,7 @@
 #include <iostream>
 #include <iomanip>
 #include <format>
+#include <atomic>
 #include <mutex>
 
 static const char *TAG = "io-hctrl";
@@ -51,6 +52,7 @@ constexpr int64_t STATUS_UPDATE_BACKOFF_2_US = 300'000'000LL;    // 5 min  (2 co
 constexpr int64_t STATUS_UPDATE_BACKOFF_3_US = 1'800'000'000LL;  // 30 min (3 consecutive failures)
 // 4+ consecutive failures reuse STATUS_UPDATE_MAX_TIME_US (1 hour)
 constexpr int64_t STATUS_UPDATE_AFTER_REMOTE_US = 2000000;  // 2 seconds after detection of a frame sent by a remote
+constexpr int64_t STATUS_POLL_HOLD_MAX_US = 60'000'000LL;   // HoldStatusPolls() stops deferring polls after 60 s
 
 constexpr size_t LOG_MESSAGE_MAXSIZE = 256;
 constexpr int RX_STASH_MAX = 4; // max frames to stash during a single exchange
@@ -99,6 +101,8 @@ namespace iohome
   static volatile bool sSniffKeyActive = false;                    // true while passive key sniffing is active
   static char sSniffedKey[33] = {};                                // last captured key as 32-char hex + null
   static int64_t sSniffStartUs = 0;                                // timestamp when sniffing started
+  static std::atomic<int> sStatusPollHolds{0};                     // HoldStatusPolls() reference count
+  static std::atomic<int64_t> sStatusPollHoldStartUs{0};           // when the count last went 0 -> 1
 
   constexpr int64_t KEY_SNIFF_TIMEOUT_US = 120LL * 1000000LL;     // 120 s auto-stop
 
@@ -828,11 +832,30 @@ namespace iohome
     }
   }
 
+  void IoHomeControl::HoldStatusPolls()
+  {
+    if (sStatusPollHolds.fetch_add(1) == 0)
+      sStatusPollHoldStartUs = esp_timer_get_time();
+  }
+
+  void IoHomeControl::ReleaseStatusPolls()
+  {
+    int prev = sStatusPollHolds.load();
+    while (prev > 0 && !sStatusPollHolds.compare_exchange_weak(prev, prev - 1))
+      ;
+  }
+
+  static bool status_polls_held()
+  {
+    return sStatusPollHolds.load() > 0 &&
+           (esp_timer_get_time() - sStatusPollHoldStartUs.load()) < STATUS_POLL_HOLD_MAX_US;
+  }
+
   void IoHomeControl::UpdateDevicesStatusTask()
   {
     for (;;) // infinite loop
     {
-      if (!isPassive()) // not passive, check if we should update some device status!
+      if (!isPassive() && !status_polls_held()) // not passive and no command burst running
       {
         // Snapshot device IDs under mutex to avoid iterating sDeviceMap concurrently with
         // insertions (RestoreDevice) or field writes (ProcessReceivedFrameTask).
@@ -846,6 +869,9 @@ namespace iohome
 
         for (const auto &devId : deviceIds)
         {
+          // A command burst started mid-loop: give the radio back, remaining polls stay overdue.
+          if (status_polls_held()) break;
+
           // Read device state under mutex to avoid data race with ProcessReceivedFrameTask writes.
           bool ownNode = false, isDeleted = false, needsName = false, needsType = false, shouldUpdate = false;
           if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))

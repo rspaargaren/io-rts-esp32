@@ -138,6 +138,11 @@ namespace iohome
     /// @attention Do not use directly, it is used by internal thread.
     void UpdateDevicesStatusTask();
 
+    /// @brief Pause status polls while a command burst is in progress (reference-counted)
+    void HoldStatusPolls();
+    /// @brief Release one hold placed by HoldStatusPolls()
+    void ReleaseStatusPolls();
+
     // ========================================================================
     // 2W Mode Features
     // ========================================================================

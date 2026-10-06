@@ -5,6 +5,10 @@
 #include "argtable3/argtable3.h"
 #include "esp_console.h"
 #include "esp_log.h"
+#ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
+#include "esp_mac.h"
+#include "esp_wifi.h"
+#endif
 
 using namespace Config;
 
@@ -138,6 +142,46 @@ void register_configwifi(void)
         .context = NULL};
 
     ESP_ERROR_CHECK(esp_console_cmd_register(&configwifi_cmd));
+}
+
+static int do_wifi_scan_cmd(int argc, char **argv)
+{
+    wifi_scan_config_t scan_cfg = {};
+    scan_cfg.show_hidden = true;
+    esp_err_t err = esp_wifi_scan_start(&scan_cfg, true); // blocking
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Scan failed: %s", esp_err_to_name(err));
+        return 1;
+    }
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    if (ap_count == 0) { ESP_LOGI(TAG, "No networks found"); return 0; }
+    wifi_ap_record_t *records = new wifi_ap_record_t[ap_count];
+    esp_wifi_scan_get_ap_records(&ap_count, records);
+    ESP_LOGI(TAG, "%-32s  %-17s  ch  rssi  auth", "SSID", "BSSID");
+    for (uint16_t i = 0; i < ap_count; i++)
+    {
+        ESP_LOGI(TAG, "%-32s  " MACSTR "  %2d  %4d  %d",
+                 (const char *)records[i].ssid,
+                 MAC2STR(records[i].bssid),
+                 records[i].primary, records[i].rssi, (int)records[i].authmode);
+    }
+    delete[] records;
+    return 0;
+}
+
+void register_wifi_scan(void)
+{
+    const esp_console_cmd_t wifi_scan_cmd = {
+        .command = "wifi_scan",
+        .help = "Scan for WiFi networks and print SSID/BSSID/channel/RSSI/authmode",
+        .hint = NULL,
+        .func = &do_wifi_scan_cmd,
+        .argtable = NULL,
+        .func_w_context = NULL,
+        .context = NULL};
+    ESP_ERROR_CHECK(esp_console_cmd_register(&wifi_scan_cmd));
 }
 #endif // CONFIG_CONNECTIVITY_CHOICE_WIFI
 
@@ -321,6 +365,7 @@ void register_network_config_cmdline_tools()
 {
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
     register_configwifi();
+    register_wifi_scan();
 #endif // CONFIG_CONNECTIVITY_CHOICE_WIFI
     register_config_network();
 }
