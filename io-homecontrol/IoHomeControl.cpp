@@ -1654,7 +1654,8 @@ namespace iohome
       it->second.move_start_us   = esp_timer_get_time();
       it->second.move_start_pos  = it->second.position;
       it->second.move_target_pos = (float)position;
-      if (create_execute_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, position, quiet) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
+      const bool favoriteWithTilt = (position == CMD_PARAM_POSITION_FAVORITE) && deviceTypeSupportsTilt(it->second.info.device_type);
+      if (create_execute_request(request, mOwnNodeId, it->second.info.node_id, it->second.info.is_low_power, position, quiet, favoriteWithTilt) && SendAndReceive(request, response, FREQUENCY_CHANNEL_2))
       {
         UpdateDeviceStatus(response);
         ret = true;
