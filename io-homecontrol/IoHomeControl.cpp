@@ -2188,7 +2188,10 @@ namespace iohome
                 memcpy(&response, &rxItem.frame, sizeof(response));
                 return true;
               }
-              setStartFlagToAuthentResponse = true;
+              // Alternate the START flag on retries: most devices expect it on
+              // the 0x3D challenge response, but some (e.g. Somfy J406 io) only
+              // answer a 0x3D sent without it, like the Connectivity Kit does.
+              setStartFlagToAuthentResponse = !setStartFlagToAuthentResponse;
               IO_LOGW("SendAndReceive: didn't receive final response!");
               continue;
             }
