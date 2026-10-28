@@ -1855,7 +1855,21 @@ namespace Helpers
     }
     void MqttHelpers::OnNetworkConnected()
     {
-        if (!mStarted || mMqttClientHandle == nullptr)
+        if (!mStarted)
+        {
+            // StartMqttClient() refuses to start while the network is not up yet (returns
+            // ESP_ERR_INVALID_STATE). At boot the manager usually calls it before the IP
+            // address is obtained, so start the client now that the network is available.
+            // Without this, MQTT stayed "not connected" after every reboot until the
+            // settings were saved again.
+            if (MqttConfig::isEnabled())
+            {
+                ESP_LOGI(TAG, "Network up — starting MQTT client");
+                StartMqttClient();
+            }
+            return;
+        }
+        if (mMqttClientHandle == nullptr)
             return;
         esp_timer_stop(mReconnectTimer); // cancel any pending broker-drop retry
         ESP_LOGI(TAG, "Network up — triggering MQTT reconnect");
