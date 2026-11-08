@@ -280,6 +280,12 @@ namespace iohome
     /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
     void InvertOpenClosePositionForDevice(const std::string &deviceID);
 
+    /// @brief Set low power mode (long preamble) for given device
+    /// @param deviceID Device ID (6 characters as hex representation of the 3 bytes, eg "112233")
+    /// @param lowPower true to use a long preamble for frames sent to this device
+    /// @return true if the device was found and updated
+    bool SetDeviceLowPower(const std::string &deviceID, bool lowPower);
+
     /// @brief Send an IO frame and wait for a response. Handles authentication automatically if required by remote.
     /// @param rawFrame string representation of the IO frame, from CTRL0 byte to last byte of data (without CRC)
     /// @param frequency frequency to use to send the frame, in Hz

@@ -660,6 +660,10 @@ namespace IoRts
         if (!found)
             return false;
 
+        // Apply to the radio layer right away, not only after the next reboot
+        if (mIoHome != nullptr)
+            mIoHome->SetDeviceLowPower(deviceID, low_power);
+
         Helpers::StoredIoDevice stored;
         if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) != ESP_OK)
             return false;
