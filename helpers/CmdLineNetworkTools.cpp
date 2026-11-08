@@ -162,9 +162,11 @@ static int do_wifi_scan_cmd(int argc, char **argv)
     ESP_LOGI(TAG, "%-32s  %-17s  ch  rssi  auth", "SSID", "BSSID");
     for (uint16_t i = 0; i < ap_count; i++)
     {
-        ESP_LOGI(TAG, "%-32s  " MACSTR "  %2d  %4d  %d",
+        ESP_LOGI(TAG, "%-32s  %02x:%02x:%02x:%02x:%02x:%02x  %2d  %4d  %d",
                  (const char *)records[i].ssid,
-                 MAC2STR(records[i].bssid),
+                 (unsigned)records[i].bssid[0], (unsigned)records[i].bssid[1],
+                 (unsigned)records[i].bssid[2], (unsigned)records[i].bssid[3],
+                 (unsigned)records[i].bssid[4], (unsigned)records[i].bssid[5],
                  records[i].primary, records[i].rssi, (int)records[i].authmode);
     }
     delete[] records;

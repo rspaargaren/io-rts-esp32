@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "pair_log.h"
+#include "oled_display.h"
 #include <cmath>
 #include "sdkconfig.h"
 #include "esp_log.h"
@@ -50,6 +51,7 @@
 #include "NetworkConfig.hpp"
 #include "IoHomeConfig.hpp"
 #include "MiscConfig.hpp"
+#include "DisplayConfig.hpp"
 #include "JsonStreamingParser2.h"
 #include "JsonPathCallback.h"
 
@@ -409,6 +411,17 @@ static esp_err_t static_file_handler(httpd_req_t *req)
     struct stat st, gz_st;
     bool orig_exists = (stat(filepath, &st) == 0);
     bool gz_exists   = (stat(gz_path, &gz_st) == 0);
+    if (!orig_exists && !gz_exists) {
+        const char *last_segment = strrchr(uri, '/');
+        const char *filename = last_segment ? last_segment + 1 : uri;
+        if (strncmp(uri, "/api/", 5) != 0 && strcmp(uri, "/api") != 0 &&
+            !strrchr(filename, '.')) {
+            snprintf(filepath, sizeof(filepath), "%s/index.html", WEB_BASE_PATH);
+            snprintf(gz_path, sizeof(gz_path), "%s.gz", filepath);
+            orig_exists = (stat(filepath, &st) == 0);
+            gz_exists   = (stat(gz_path, &gz_st) == 0);
+        }
+    }
     if (!orig_exists && !gz_exists) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");
         return ESP_FAIL;
@@ -1855,6 +1868,7 @@ static esp_err_t api_settings_get(httpd_req_t *req)
     cJSON *obj = cJSON_CreateObject();
     cJSON *arr = buf[0] ? cJSON_Parse(buf) : cJSON_CreateArray();
     cJSON_AddItemToObject(obj, "device_order", arr ? arr : cJSON_CreateArray());
+    cJSON_AddBoolToObject(obj, "display_enabled", Config::DisplayConfig::isEnabled());
     send_json(req, obj);
     return ESP_OK;
 }
@@ -1872,24 +1886,46 @@ static esp_err_t api_settings_post(httpd_req_t *req)
     if (!json) { send_result(req, false, "Invalid JSON"); return ESP_OK; }
 
     cJSON *order = cJSON_GetObjectItem(json, "device_order");
-    if (!cJSON_IsArray(order)) { cJSON_Delete(json); send_result(req, false, "Missing device_order array"); return ESP_OK; }
-
-    char *serialised = cJSON_PrintUnformatted(order);
-    cJSON_Delete(json);
-    if (!serialised) { send_result(req, false, "Serialisation failed"); return ESP_OK; }
-
-    if (strlen(serialised) >= 512) { free(serialised); send_result(req, false, "Order too large"); return ESP_OK; }
-
-    nvs_handle_t h;
-    bool ok = false;
-    if (nvs_open("io_settings", NVS_READWRITE, &h) == ESP_OK) {
-        ok = (nvs_set_str(h, "device_order", serialised) == ESP_OK);
-        if (ok) nvs_commit(h);
-        nvs_close(h);
+    cJSON *displayEnabled = cJSON_GetObjectItem(json, "display_enabled");
+    if ((!order && !displayEnabled) ||
+        (order && !cJSON_IsArray(order)) ||
+        (displayEnabled && !cJSON_IsBool(displayEnabled))) {
+        cJSON_Delete(json);
+        send_result(req, false, "Expected device_order array and/or display_enabled boolean");
+        return ESP_OK;
     }
-    free(serialised);
 
-    send_result(req, ok, ok ? "Settings saved" : "NVS write failed");
+    bool ok = true;
+    if (order) {
+        char *serialised = cJSON_PrintUnformatted(order);
+        if (!serialised) {
+            cJSON_Delete(json);
+            send_result(req, false, "Serialisation failed");
+            return ESP_OK;
+        }
+        if (strlen(serialised) >= 512) {
+            free(serialised);
+            cJSON_Delete(json);
+            send_result(req, false, "Order too large");
+            return ESP_OK;
+        }
+
+        nvs_handle_t h;
+        ok = nvs_open("io_settings", NVS_READWRITE, &h) == ESP_OK;
+        if (ok) {
+            ok = nvs_set_str(h, "device_order", serialised) == ESP_OK;
+            if (ok) ok = nvs_commit(h) == ESP_OK;
+            nvs_close(h);
+        }
+        free(serialised);
+    }
+    if (ok && displayEnabled) {
+        const bool enabled = cJSON_IsTrue(displayEnabled);
+        ok = Config::DisplayConfig::SetEnabled(enabled) == ESP_OK;
+        if (ok) oled_set_enabled(enabled);
+    }
+    cJSON_Delete(json);
+    send_result(req, ok, ok ? "Settings saved" : "Failed to save settings");
     return ESP_OK;
 }
 
@@ -2686,6 +2722,10 @@ static esp_err_t api_backup_get(httpd_req_t *req)
     cJSON_AddBoolToObject(io_cfg, "passive_mode", Config::IoHomeConfig::isPassiveModeEnabled());
     cJSON_AddItemToObject(settings, "io", io_cfg);
 
+    cJSON *display_cfg = cJSON_CreateObject();
+    cJSON_AddBoolToObject(display_cfg, "enabled", Config::DisplayConfig::isEnabled());
+    cJSON_AddItemToObject(settings, "display", display_cfg);
+
     cJSON_AddItemToObject(root, "settings", settings);
 
     char *str = cJSON_Print(root);
@@ -2808,6 +2848,19 @@ static esp_err_t api_restore_post(httpd_req_t *req)
             v = cJSON_GetObjectItem(io_r, "tx_power");     if (cJSON_IsNumber(v)) Config::IoHomeConfig::SetTxPower((uint8_t)v->valuedouble);
             v = cJSON_GetObjectItem(io_r, "passive_mode"); if (cJSON_IsBool(v)) Config::IoHomeConfig::ActivatePassiveMode(cJSON_IsTrue(v));
         }
+        cJSON *display_r = cJSON_GetObjectItem(settings, "display");
+        if (cJSON_IsObject(display_r)) {
+            cJSON *v = cJSON_GetObjectItem(display_r, "enabled");
+            if (cJSON_IsBool(v)) {
+                const bool enabled = cJSON_IsTrue(v);
+                if (Config::DisplayConfig::SetEnabled(enabled) != ESP_OK) {
+                    cJSON_Delete(root);
+                    send_result(req, false, "Failed to restore display setting");
+                    return ESP_OK;
+                }
+                oled_set_enabled(enabled);
+            }
+        }
     }
 
     cJSON_Delete(root);
@@ -2823,7 +2876,7 @@ static esp_err_t api_factory_reset_post(httpd_req_t *req)
 {
     if (!ota_check_key(req)) { httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized"); return ESP_OK; }
 
-    const char *namespaces[] = { "mqtt", "syslog", "ota", "network", "iohc", "misc" };
+    const char *namespaces[] = { "mqtt", "syslog", "ota", "network", "iohc", "misc", "display", "io_settings" };
     for (const auto &ns : namespaces) {
         nvs_handle_t h;
         if (nvs_open(ns, NVS_READWRITE, &h) == ESP_OK) {

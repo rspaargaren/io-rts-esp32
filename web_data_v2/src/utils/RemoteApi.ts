@@ -46,6 +46,17 @@ export function saveDeviceOrder(otaKey: string, order: string[]): Promise<unknow
   return postJson("/api/settings", otaKey, { device_order: order });
 }
 
+export function saveDisplayEnabled(otaKey: string, enabled: boolean): Promise<unknown> {
+  return postJson<ActionResult>("/api/settings", otaKey, {
+    display_enabled: enabled,
+  }).then((result) => {
+    if (!result.success) {
+      throw new Error(result.message || "Failed to save display setting");
+    }
+    return result;
+  });
+}
+
 export function startCaptureRequest(otaKey: string): Promise<unknown> {
   return postJson("/api/remote/capture/start", otaKey, {});
 }

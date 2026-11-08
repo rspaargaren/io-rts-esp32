@@ -8,11 +8,11 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_timer.h"
+#include "esp_mac.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
-#include "esp_mac.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -20,7 +20,6 @@
 
 #ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
 #include "esp_eth.h"
-#include "esp_mac.h"
 #include "esp_eth_mac_w5500.h"
 #include "esp_eth_phy_w5500.h"
 #endif // CONFIG_CONNECTIVITY_CHOICE_ETH
@@ -327,8 +326,11 @@ namespace Helpers
             wifi_event_sta_connected_t *evt = (wifi_event_sta_connected_t *)event_data;
             wifi_ap_record_t ap;
             int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
-            ESP_LOGI(TAG, "Associated: bssid " MACSTR " ch %d authmode %d aid %d rssi %d dBm",
-                     MAC2STR(evt->bssid), evt->channel, (int)evt->authmode, evt->aid, rssi);
+            ESP_LOGI(TAG, "Associated: bssid %02x:%02x:%02x:%02x:%02x:%02x ch %d authmode %d aid %d rssi %d dBm",
+                     (unsigned)evt->bssid[0], (unsigned)evt->bssid[1],
+                     (unsigned)evt->bssid[2], (unsigned)evt->bssid[3],
+                     (unsigned)evt->bssid[4], (unsigned)evt->bssid[5],
+                     evt->channel, (int)evt->authmode, evt->aid, rssi);
             sLastStaChannel = evt->channel;
             set_ip_from_configuration();
         }
@@ -345,8 +347,11 @@ namespace Helpers
             else if (sWifiRetryCount <= 4) delay_ms = 10000;
             else if (sWifiRetryCount <= 6) delay_ms = 20000;
             else                           delay_ms = 30000;
-            ESP_LOGW(TAG, "WiFi disconnected from " MACSTR " (reason %d = %s, rssi %d), retry %d in %ds",
-                     MAC2STR(evt->bssid), evt->reason, disconnect_reason_name(evt->reason),
+            ESP_LOGW(TAG, "WiFi disconnected from %02x:%02x:%02x:%02x:%02x:%02x (reason %d = %s, rssi %d), retry %d in %ds",
+                     (unsigned)evt->bssid[0], (unsigned)evt->bssid[1],
+                     (unsigned)evt->bssid[2], (unsigned)evt->bssid[3],
+                     (unsigned)evt->bssid[4], (unsigned)evt->bssid[5],
+                     evt->reason, disconnect_reason_name(evt->reason),
                      evt->rssi, sWifiRetryCount, delay_ms / 1000);
             esp_timer_stop(sReconnectTimer); // cancel any pending reconnect before rescheduling
             esp_timer_start_once(sReconnectTimer, (uint64_t)delay_ms * 1000);

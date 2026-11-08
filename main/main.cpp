@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "HardwareConfig.hpp"
+#include "DisplayConfig.hpp"
 #include "NetworkConfig.hpp"
 #include "NetworkHelpers.hpp"
 #include "WifiProvision.hpp"
@@ -82,7 +83,7 @@ extern "C" void app_main(void)
 #endif
 
 #if CONFIG_OLED_ENABLED
-    ESP_ERROR_CHECK(oled_init());
+    ESP_ERROR_CHECK(oled_init(Config::DisplayConfig::isEnabled()));
     oled_show_status("Booting...");
 #endif
 

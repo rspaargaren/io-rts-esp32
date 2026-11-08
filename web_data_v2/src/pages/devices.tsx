@@ -23,6 +23,7 @@ export function Devices() {
     helloMessage: '{"type":"hello"}',
     onOpen: () => {
       console.log("WS connected");
+      deviceApi.refresh();
     },
     onClose: () => {
       console.log("WS closed");

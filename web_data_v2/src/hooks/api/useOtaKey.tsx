@@ -1,56 +1,63 @@
-import { useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useState } from "preact/hooks";
 import type { ApiResponse } from "../useApi";
 import { Key } from "../../models/Types";
 
+let cachedKey: Key | undefined;
+let keyRequest: Promise<Key> | undefined;
+
+function requestOtaKey(forceRefresh: boolean): Promise<Key> {
+  if (!forceRefresh && cachedKey) return Promise.resolve(cachedKey);
+  if (!forceRefresh && keyRequest) return keyRequest;
+
+  const request = fetch("/api/ota/key", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    credentials: "same-origin",
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(`Failed to load OTA key (${response.status})`);
+    }
+    const parsed = (await response.json()) as Key;
+    cachedKey = parsed;
+    return parsed;
+  });
+
+  keyRequest = request;
+  void request.then(
+    () => {
+      if (keyRequest === request) keyRequest = undefined;
+    },
+    () => {
+      if (keyRequest === request) keyRequest = undefined;
+    },
+  );
+  return request;
+}
+
 export function useOtaKey(): ApiResponse<Key> {
-  const [data, setData] = useState<Key | undefined>(undefined);
-  const [loaded, setLoaded] = useState(false);
+  const [data, setData] = useState<Key | undefined>(() => cachedKey);
+  const [loaded, setLoaded] = useState(() => cachedKey !== undefined);
   const [isError, setIsError] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     setRefreshNonce((prev) => prev + 1);
-  };
+  }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
     let cancelled = false;
 
     async function loadOtaKey() {
-      setLoaded(false);
+      if (refreshNonce > 0) setLoaded(false);
       setIsError(false);
-
       try {
-        const response = await fetch("/api/ota/key", {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-          },
-          signal: controller.signal,
-          credentials: "same-origin",
-        });
-
-        if (controller.signal.aborted) return;
-
-        if (!response.ok) {
-          if (!cancelled) {
-            setIsError(true);
-            setData(undefined);
-            setLoaded(true);
-          }
-          return;
-        }
-
-        const parsed = (await response.json()) as Key;
-
+        const parsed = await requestOtaKey(refreshNonce > 0);
         if (!cancelled) {
           setData(parsed);
           setIsError(false);
           setLoaded(true);
         }
-      } catch (error) {
-        if ((error as { name?: string }).name === "AbortError") return;
-
+      } catch {
         if (!cancelled) {
           setIsError(true);
           setData(undefined);
@@ -63,7 +70,6 @@ export function useOtaKey(): ApiResponse<Key> {
 
     return () => {
       cancelled = true;
-      controller.abort();
     };
   }, [refreshNonce]);
 

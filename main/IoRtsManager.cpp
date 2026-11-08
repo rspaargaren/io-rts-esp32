@@ -228,9 +228,6 @@ namespace IoRts
                 state = dev.info.is_openclose_inverted ? "opening" : "closing";
             else if (dev.move_target_pos < dev.move_start_pos)
                 state = dev.info.is_openclose_inverted ? "closing" : "opening";
-#if CONFIG_WEB_ENABLED
-            web_server_broadcast_position(id.c_str(), estimated_int, false, true);
-#endif
             if (sMqttHelper != nullptr)
                 sMqttHelper->PublishEstimatedPosition(id, estimated_int, state);
 
@@ -245,6 +242,9 @@ namespace IoRts
                 }
                 dev.move_start_us = 0;
             }
+#if CONFIG_WEB_ENABLED
+            web_server_broadcast_position(id.c_str(), estimated_int, dev.is_stopped, true);
+#endif
         }
         sIoRtsManager->mIoDevicesMutex.unlock();
 
