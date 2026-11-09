@@ -267,13 +267,26 @@ export function PairingWizardProvider({
 
     setStatus("Adding device…");
 
-    postAction("", "addDevice", otaKey.data?.key || "", {
-      id: addr,
-      name: nameInputAddress.trim(),
-      device_type: parseInt(deviceTypeAddress.toString(), 10),
-      protocol: protocolAddress,
-      is_low_power: isLowPowerAddress,
+    // Adding a device by address is handled by its own endpoint, not by
+    // /api/action (which has no "addDevice" action).
+    fetch("/api/devices/add", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-OTA-Key": otaKey.data?.key || "",
+      },
+      body: JSON.stringify({
+        id: addr,
+        name: nameInputAddress.trim(),
+        device_type: parseInt(deviceTypeAddress.toString(), 10),
+        protocol: protocolAddress,
+        is_low_power: isLowPowerAddress,
+      }),
     })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`Server error ${r.status}`);
+        return (await r.json()) as { success?: boolean; message?: string };
+      })
       .then((data) => {
         if (data.success) {
           setStatus(`✓ Device ${addr} added.`);

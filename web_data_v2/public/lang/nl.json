@@ -423,6 +423,7 @@
   "popup.transit_failed": "Calibration failed.",
   "popup.transit_cancelled": "Calibration cancelled.",
   "button.back": "Terug",
+  "button.add_device": "Apparaat toevoegen",
   "button.cancel": "Annuleren",
   "button.pair": "Koppelen",
   "button.capture_remote": "Afstandsbediening vastleggen",

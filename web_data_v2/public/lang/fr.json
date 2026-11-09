@@ -423,6 +423,7 @@
   "popup.transit_failed": "Calibration failed.",
   "popup.transit_cancelled": "Calibration cancelled.",
   "button.back": "Retour",
+  "button.add_device": "Ajouter l'appareil",
   "button.cancel": "Annuler",
   "button.pair": "Appairer",
   "button.capture_remote": "Capturer la télécommande",
