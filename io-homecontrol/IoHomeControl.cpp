@@ -660,6 +660,111 @@ namespace iohome
     }
   }
 
+  // ============================================================================
+  // Passive key sniffing: verification of the captured system key
+  // ============================================================================
+  //
+  // When a controller (Connectivity Kit, TaHoma, ...) pairs a device, it sends 0x31
+  // (key init), the device answers with a 0x3C challenge and the controller sends
+  // 0x32 with the system key protected by TRANSFER_KEY. The IV for 0x32 is built
+  // from the frame that started the transfer (command + data, here 0x31), the same
+  // way create_key_transfer() does it when we pair a device ourselves. The sniffer
+  // used the 0x3C frame instead, which gives a wrong key with the Connectivity Kit.
+  //
+  // To stay safe for controllers that have not been tested, both candidates are
+  // computed and checked against the next authenticated exchange (0x3C / 0x3D)
+  // between the two nodes. Only a verified key is reported as such; if nothing can
+  // be verified in time, the key computed the previous way is reported.
+
+  struct SniffedKeyVerification
+  {
+    bool pending = false;
+    bool notifyUi = false;
+    int64_t startUs = 0;
+    uint8_t controller[NODE_ID_SIZE] = {};
+    uint8_t device[NODE_ID_SIZE] = {};
+    uint8_t candidates[2][AES_KEY_SIZE] = {}; // [0] from key init frame, [1] from challenge frame (previous behaviour)
+    uint8_t request[1 + FRAME_MAX_DATA_SIZE] = {};
+    size_t requestLen = 0;
+    uint8_t requestSrc[NODE_ID_SIZE] = {};
+    uint8_t challenge[HMAC_SIZE] = {};
+    bool hasChallenge = false;
+  };
+  static SniffedKeyVerification sKeyVerification;
+  constexpr int64_t KEY_VERIFY_TIMEOUT_US = 30LL * 1000000LL; // time to wait for an authenticated exchange
+  constexpr int KEY_CANDIDATE_INIT_FRAME = 0;
+  constexpr int KEY_CANDIDATE_CHALLENGE_FRAME = 1;
+
+  static void ReportSniffedKey(int index, bool verified)
+  {
+    SniffedKeyVerification &v = sKeyVerification;
+    std::string hexKey = buffToHexString(AES_KEY_SIZE, v.candidates[index]);
+    std::string device = buffToHexString(NODE_ID_SIZE, v.device);
+    if (verified)
+    {
+      IO_LOGI("Extracted a key to control device {}: {} (verified)", device, hexKey);
+    }
+    else
+    {
+      IO_LOGW("Extracted a key to control device {}: {} (not verified, if it does not work try {})",
+              device, hexKey, buffToHexString(AES_KEY_SIZE, v.candidates[1 - index]));
+    }
+    if (v.notifyUi)
+    {
+      strncpy(sSniffedKey, hexKey.c_str(), 32);
+      sSniffedKey[32] = '\0';
+      sSniffKeyActive = false;
+      if (sKeySniffCallback)
+        sKeySniffCallback(hexKey);
+    }
+    v.pending = false;
+  }
+
+  static void TrackSniffedKeyVerification(const IoFrame &frame)
+  {
+    SniffedKeyVerification &v = sKeyVerification;
+    if (!v.pending)
+      return;
+    bool ctrlToDev = memcmp(frame.src_node, v.controller, NODE_ID_SIZE) == 0 && memcmp(frame.dest_node, v.device, NODE_ID_SIZE) == 0;
+    bool devToCtrl = memcmp(frame.src_node, v.device, NODE_ID_SIZE) == 0 && memcmp(frame.dest_node, v.controller, NODE_ID_SIZE) == 0;
+    if (!ctrlToDev && !devToCtrl)
+      return;
+
+    switch (frame.command_id)
+    {
+    case CMD_CHALLENGE_REQUEST: // challenge from the receiver of the last request
+      if (v.requestLen > 0 && frame.data_len == HMAC_SIZE && memcmp(frame.src_node, v.requestSrc, NODE_ID_SIZE) != 0)
+      {
+        memcpy(v.challenge, frame.data, HMAC_SIZE);
+        v.hasChallenge = true;
+      }
+      break;
+    case CMD_CHALLENGE_RESPONSE: // response from the sender of the last request
+      if (v.hasChallenge && frame.data_len == HMAC_SIZE && memcmp(frame.src_node, v.requestSrc, NODE_ID_SIZE) == 0)
+      {
+        for (int i = 0; i < 2; i++)
+        {
+          if (crypto::verify_hmac(v.request, v.requestLen, frame.data, v.challenge, v.candidates[i]))
+          {
+            ReportSniffedKey(i, true);
+            return;
+          }
+        }
+        IO_LOGW("Key verification: no candidate key matches the authenticated exchange");
+      }
+      v.hasChallenge = false;
+      v.requestLen = 0;
+      break;
+    default: // any other frame may be a request that will be authenticated
+      v.request[0] = frame.command_id;
+      memcpy(v.request + 1, frame.data, frame.data_len);
+      v.requestLen = 1 + frame.data_len;
+      memcpy(v.requestSrc, frame.src_node, NODE_ID_SIZE);
+      v.hasChallenge = false;
+      break;
+    }
+  }
+
   void IoHomeControl::ProcessReceivedFrameTask()
   {
     for (;;)
@@ -669,12 +774,14 @@ namespace iohome
         RxFrameQueueItem item;
         if (xQueueReceive(sRxIoQueue, &item, 0))
         {
-          // Auto-stop key sniffing after timeout
-          if (sSniffKeyActive && (esp_timer_get_time() - sSniffStartUs) > KEY_SNIFF_TIMEOUT_US)
+          // Auto-stop key sniffing after timeout (unless a captured key is still being verified)
+          if (sSniffKeyActive && !sKeyVerification.pending && (esp_timer_get_time() - sSniffStartUs) > KEY_SNIFF_TIMEOUT_US)
           {
             sSniffKeyActive = false;
             IO_LOGI("Key sniffing timed out after 120 s");
           }
+          if (isPassive())
+            TrackSniffedKeyVerification(item.frame);
           std::string dstDevice = buffToHexString(NODE_ID_SIZE, item.frame.dest_node);
           std::string srcDevice = buffToHexString(NODE_ID_SIZE, item.frame.src_node);
           switch (item.frame.command_id)
@@ -697,7 +804,6 @@ namespace iohome
             {
               // Listen and get the key!
               RxFrameQueueItem challengeItem, keyTransferItem;
-              uint8_t decrypted_key[AES_KEY_SIZE];
               if (xQueueReceive(sRxIoQueue, &challengeItem, RECEIVED_IO_TREATMENT_WAIT_TICKS)      // Did we receive a frame?
                   && challengeItem.frame.command_id == CMD_CHALLENGE_REQUEST                        // Is it a challenge?
                   && challengeItem.frame.data_len == HMAC_SIZE                                      // Does it contain correct data length?
@@ -705,21 +811,28 @@ namespace iohome
                   && keyTransferItem.frame.command_id == CMD_KEY_TRANSFER                           // Is it a key transfer?
                   && keyTransferItem.frame.data_len == AES_KEY_SIZE)                                // Does it contain correct data length?
               {
+                // Candidate 0: IV from the key init frame (command + data), as used by create_key_transfer()
+                uint8_t init_fd[1 + FRAME_MAX_DATA_SIZE];
+                init_fd[0] = item.frame.command_id;
+                memcpy(init_fd + 1, item.frame.data, item.frame.data_len);
+                // Candidate 1: IV from the challenge frame (previous behaviour)
                 uint8_t challenge_fd[1 + HMAC_SIZE];
                 challenge_fd[0] = challengeItem.frame.command_id;
                 memcpy(challenge_fd + 1, challengeItem.frame.data, HMAC_SIZE);
-                if (iohome::crypto::crypt_2w_key(challenge_fd, sizeof(challenge_fd), challengeItem.frame.data, keyTransferItem.frame.data, decrypted_key))
+
+                SniffedKeyVerification &v = sKeyVerification;
+                if (iohome::crypto::crypt_2w_key(init_fd, 1 + item.frame.data_len, challengeItem.frame.data, keyTransferItem.frame.data, v.candidates[KEY_CANDIDATE_INIT_FRAME])
+                    && iohome::crypto::crypt_2w_key(challenge_fd, sizeof(challenge_fd), challengeItem.frame.data, keyTransferItem.frame.data, v.candidates[KEY_CANDIDATE_CHALLENGE_FRAME]))
                 {
-                  std::string hexKey = buffToHexString(AES_KEY_SIZE, decrypted_key);
-                  IO_LOGI("Extracted a key to control device {}: {}", buffToHexString(NODE_ID_SIZE, keyTransferItem.frame.dest_node), hexKey);
-                  if (sSniffKeyActive)
-                  {
-                    strncpy(sSniffedKey, hexKey.c_str(), 32);
-                    sSniffedKey[32] = '\0';
-                    sSniffKeyActive = false;
-                    if (sKeySniffCallback)
-                      sKeySniffCallback(hexKey);
-                  }
+                  memcpy(v.controller, keyTransferItem.frame.src_node, NODE_ID_SIZE);
+                  memcpy(v.device, keyTransferItem.frame.dest_node, NODE_ID_SIZE);
+                  v.requestLen = 0;
+                  v.hasChallenge = false;
+                  v.notifyUi = sSniffKeyActive;
+                  v.startUs = esp_timer_get_time();
+                  v.pending = true;
+                  IO_LOGI("Key transfer to device {} captured, waiting for an authenticated exchange to verify the key",
+                          buffToHexString(NODE_ID_SIZE, v.device));
                 }
                 else
                 {
@@ -822,6 +935,9 @@ namespace iohome
           break;
           }
         }
+        // No authenticated exchange seen in time: report the key computed the previous way
+        if (sKeyVerification.pending && (esp_timer_get_time() - sKeyVerification.startUs) > KEY_VERIFY_TIMEOUT_US)
+          ReportSniffedKey(KEY_CANDIDATE_CHALLENGE_FRAME, false);
         xSemaphoreGive(sMutex);
         vTaskDelay(pdMS_TO_TICKS(5)); // yield so P4/httpd can acquire mutex between frames
       }
