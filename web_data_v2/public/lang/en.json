@@ -423,6 +423,7 @@
   "popup.transit_failed": "Calibration failed.",
   "popup.transit_cancelled": "Calibration cancelled.",
   "button.back": "Back",
+  "button.add_device": "Add device",
   "button.cancel": "Cancel",
   "button.pair": "Pair",
   "button.capture_remote": "Capture Remote",
