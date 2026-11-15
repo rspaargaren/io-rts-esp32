@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased] — stability and restart diagnostics
+
+### Fixed
+- **Log forwarding could exhaust the heap.** Lines logged by the web server task itself (socket/TLS read and write errors, WebSocket send failures) were forwarded to the browser over that same connection; when the browser went away without closing (laptop lid closed with the log page open) every failure produced a new line to send. On an ESP32 without PSRAM this ended with 12 KB free / 4 KB largest block for 40 hours: radio still running, web UI and MQTT unreachable. Such lines now only go to the serial console, nothing is forwarded while memory is low (free < 16 KB or largest block < 8 KB, also for the MQTT log topic), and at most 8 WebSocket messages wait for the web server at a time.
+- **Pairing log no longer needs ~40 KB of heap.** Once it reached 500 lines, every new entry re-read the whole file and reserved ~40 KB of contiguous memory to drop the oldest line, which fails on boards with little free heap. The log is now a ring of 8 parts of < 4 KB (one LittleFS block each, 32 KB total); when the newest part is full the oldest part is dropped, so at most 1/8 of the history goes at a time. Download and the web UI still get one file, oldest first. A large log from older firmware is split into parts on the first new entry.
+- **Radio log lines appeared twice in the web log**: the radio logger sent each line itself and it also arrived through the ESP log hook.
+- **Controller settings could not save TX power or passive mode from the web UI**: the form sent `"17"` and `"on"` as strings, which the firmware ignores. It now sends a number and a boolean.
+
+### Added
+- **Restart diagnostics** (Settings → System → Uptime, and `/api/info`): uptime, why the board last started (power on, reset button, restart, crash, watchdog, brownout, out of memory), the number of starts, and — unless the power was cut — how long the previous run lasted, its lowest free heap and its first failed memory allocation (size, task, time). Kept in RTC memory and NVS, no extra heap.
+- The pairing-log `BOOT` line includes the start number, reason and previous-run data, and is written once the clock is set (max. 60 s wait), so it gets a real timestamp instead of `boot+6s`.
+- `HEAP` lines in the pairing log (uptime, free, lowest, largest block, failed allocations, open WebSocket clients and sockets): 10 minutes after start, then when memory changes noticeably and at least once a day. The first failed allocation of a run is logged right away (`OOM first: …`).
+- **Memory watchdog**: when the largest free heap block stays below 8 KB for 5 minutes the board logs `LOWMEM restart` and restarts itself (reset reason `low_memory`), instead of staying unreachable until reset by hand.
+
 ## [Unreleased] — fix/web-ui-polish
 
 ### Fixed

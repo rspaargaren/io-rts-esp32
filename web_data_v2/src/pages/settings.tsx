@@ -8,6 +8,7 @@ import { ControllerSettings } from "../components/settings/Controller";
 import { IoSystemKeySettings } from "../components/settings/IoSystemKey";
 import { OtaKeySettings } from "../components/settings/OtaKey";
 import { FirmwareSettings } from "../components/settings/Firmware";
+import { RestartSettings } from "../components/settings/Restarts";
 import { WebUISettings } from "../components/settings/WebUi";
 import { WebUIUpdateSettings } from "../components/settings/WebUiUpdate";
 import { BackupSettings } from "../components/settings/Backup";
@@ -70,6 +71,7 @@ export function Settings() {
         <div class="settings-card">
           <DisplaySettings />
           <FirmwareSettings data={infoData.data} />
+          <RestartSettings data={infoData.data} />
           <WebUISettings data={infoData.data} />
           <WebUIUpdateSettings />
           <FirmwareUpdateSettings />
