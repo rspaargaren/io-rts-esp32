@@ -23,8 +23,9 @@ namespace iohome
     /// @param is_low_power 'Low power' flag to set
     /// @param position Position to reach
     /// @param quiet Quiet mode active if true
+    /// @param favorite_with_tilt For CMD_PARAM_POSITION_FAVORITE only: also request the memorized tilt (devices with slats)
     /// @return true on success
-    bool create_execute_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power, uint8_t position, bool quiet = false);
+    bool create_execute_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power, uint8_t position, bool quiet = false, bool favorite_with_tilt = false);
 
     /// @brief Create an execute tilt IO Frame (0x00) - Sets tilt position without changing cover position
     /// @param frame Output IoFrame structure
