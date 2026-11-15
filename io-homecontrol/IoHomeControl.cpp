@@ -1111,9 +1111,38 @@ namespace iohome
               {
               // We have received a challenge, let's send our key!
               IoFrame keyTransfer;
-              if (create_key_transfer(keyTransfer, request, device.info.node_id, mOwnNodeId, mSystemKey, rxItem.frame.data) // request created
-                  && SendAndReceive(keyTransfer, response, FREQUENCY_CHANNEL_2)                                             // send OK, received something
-                  && (response.command_id == CMD_KEY_TRANSFER_CONFIRMATION))                                                // expected answer
+              // Solar/battery devices need the long wake-up preamble on the key transfer too (same issue as CMD 3D in v2.1.3):
+              // right after sending CMD 3C their radio is still switching back to RX, so a short-preamble CMD 32 is missed and
+              // CMD 33 never comes. Flag the frame as low power so SendAndReceive uses LONG_PREAMBLE_LENGTH.
+              bool keyConfirmed = false;
+              if (create_key_transfer(keyTransfer, request, device.info.node_id, mOwnNodeId, mSystemKey, rxItem.frame.data))
+              {
+                keyTransfer.ctrl_byte_1 |= CTRL1_LOW_POWER; // same frame bits as a real controller sends
+                // Solar motors (for example Somfy RS100 SOLAR IO) listen only a few ms after they send the
+                // 0x3C challenge. The normal preamble (32 bytes, or the long wake-up preamble) comes too late
+                // and the motor never answers with CMD 33. So send the key right away with a short preamble,
+                // and only try the longer preambles when the motor stays silent.
+                static const uint16_t preambles[] = {12, 12, 16, SHORT_PREAMBLE_LENGTH, LONG_PREAMBLE_LENGTH};
+                for (uint16_t preamble : preambles)
+                {
+                  if (!TransmitFrame(keyTransfer, FREQUENCY_CHANNEL_2, preamble))
+                    continue;
+                  RxFrameQueueItem confirm;
+                  TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(700);
+                  while (!keyConfirmed && xTaskGetTickCount() < deadline
+                         && xQueueReceive(sRxIoQueue, &confirm, deadline - xTaskGetTickCount()))
+                  {
+                    keyConfirmed = confirm.frame.command_id == CMD_KEY_TRANSFER_CONFIRMATION
+                                   && memcmp(confirm.frame.src_node, device.info.node_id, NODE_ID_SIZE) == 0;
+                  }
+                  if (keyConfirmed)
+                  {
+                    memcpy(&response, &confirm.frame, sizeof(response));
+                    break;
+                  }
+                }
+              }
+              if (keyConfirmed)
               {
                 // Create this device
                 std::string deviceID = buffToHexString(NODE_ID_SIZE, device.info.node_id);
