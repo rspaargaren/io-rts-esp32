@@ -2,14 +2,50 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <vector>
+#include <mutex>
 #include <string>
+#include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
 
+// The pairing log is kept in a ring of small files instead of one big file:
+//
+//   /devices/pairing_log.txt     current part, new lines are appended here
+//   /devices/pairing_log.1.txt   previous part
+//   ...
+//   /devices/pairing_log.7.txt   oldest part
+//
+// When the current part would grow past PART_MAX_BYTES, every part moves up one place and
+// the oldest one is dropped, so at most 1/8 of the history disappears at a time. Total size is
+// bounded (8 x ~4 KB = 32 KB) and appending needs no more RAM than the line itself; the old
+// implementation re-read the whole file and reserved ~40 KB of contiguous heap to trim it,
+// which fails on boards with little free memory.
+//
+// A single large log left by older firmware is split into parts on the first append.
+// Each part stays just under one LittleFS block (4 KB). The download stitches the parts
+// together oldest first, so the user still gets a single pairing_log.txt.
+
 static const char *TAG = "pair_log";
-static const char *LOG_PATH = "/devices/pairing_log.txt";
-static const int   MAX_LINES = 500;
+static const char *LOG_PATH = "/devices/pairing_log.txt"; // current part (same name as before)
+static const int   PART_COUNT = 8;                        // current + 7 older parts
+static const long  PART_MAX_BYTES = 3968;                 // just under one 4 KB LittleFS block
+static const size_t COPY_CHUNK = 256;
+
+static std::mutex s_lock; // appends come from the web server, radio and main tasks
+
+/// Path of part n: 0 = current, 1..PART_COUNT-1 = older parts
+static std::string part_path(int n)
+{
+    if (n == 0)
+        return LOG_PATH;
+    return "/devices/pairing_log." + std::to_string(n) + ".txt";
+}
+
+static long file_size(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 ? (long)st.st_size : -1;
+}
 
 static std::string timestamp_str()
 {
@@ -27,66 +63,97 @@ static std::string timestamp_str()
     return buf;
 }
 
+/// Split a log written by older firmware (one file, up to ~40 KB) into parts, keeping the most
+/// recent (PART_COUNT - 1) parts' worth. Streams line by line, so it needs no extra heap.
+/// Afterwards the current part is absent.
+static void split_legacy(long size)
+{
+    FILE *in = fopen(LOG_PATH, "r");
+    if (!in) {
+        remove(LOG_PATH);
+        return;
+    }
+    long start = size - (long)(PART_COUNT - 1) * (PART_MAX_BYTES - 128); // margin for line ends
+    if (start > 0) {
+        fseek(in, start, SEEK_SET);
+        int c;
+        while ((c = fgetc(in)) != EOF && c != '\n') {
+            // skip the partial first line
+        }
+    }
+
+    // Write oldest first into temporary parts, then give them their final numbers
+    char line[COPY_CHUNK];
+    int parts = 0;
+    long part_size = 0;
+    FILE *out = nullptr;
+    while (fgets(line, sizeof(line), in)) {
+        long len = (long)strlen(line);
+        if (!out || part_size + len > PART_MAX_BYTES) {
+            if (out)
+                fclose(out);
+            if (parts == PART_COUNT - 1)
+                break; // should not happen thanks to the margin above
+            out = fopen(("/devices/pairing_log.tmp" + std::to_string(parts) + ".txt").c_str(), "w");
+            parts++;
+            part_size = 0;
+            if (!out)
+                break;
+        }
+        fputs(line, out);
+        part_size += len;
+    }
+    if (out)
+        fclose(out);
+    fclose(in);
+    remove(LOG_PATH);
+
+    for (int k = 0; k < parts; k++) {
+        std::string tmp = "/devices/pairing_log.tmp" + std::to_string(k) + ".txt";
+        if (rename(tmp.c_str(), part_path(parts - k).c_str()) != 0)
+            remove(tmp.c_str());
+    }
+}
+
+/// Shift all parts up one place, dropping the oldest. Afterwards the current part is absent.
+static void rotate(long current_size)
+{
+    if (current_size > PART_MAX_BYTES) {
+        // One big log from older firmware (no older parts exist yet)
+        for (int n = 1; n < PART_COUNT; n++)
+            remove(part_path(n).c_str());
+        split_legacy(current_size);
+        return;
+    }
+
+    remove(part_path(PART_COUNT - 1).c_str());
+    for (int n = PART_COUNT - 2; n >= 1; n--)
+        rename(part_path(n).c_str(), part_path(n + 1).c_str()); // missing parts: harmless failure
+
+    if (rename(LOG_PATH, part_path(1).c_str()) != 0) {
+        ESP_LOGE(TAG, "Failed to rotate %s", LOG_PATH);
+        remove(LOG_PATH);
+    }
+}
+
 void pair_log_append(const char *entry)
 {
     if (!entry || !*entry) return;
 
     std::string line = timestamp_str() + " " + entry + "\n";
 
-    // Count existing lines
-    FILE *f = fopen(LOG_PATH, "r");
-    int count = 0;
-    std::vector<long> offsets; // byte offset of each line start
+    std::lock_guard<std::mutex> guard(s_lock);
+
+    long size = file_size(LOG_PATH);
+    if (size > 0 && size + (long)line.size() > PART_MAX_BYTES)
+        rotate(size);
+
+    FILE *f = fopen(LOG_PATH, "a");
     if (f) {
-        offsets.push_back(0);
-        int c;
-        while ((c = fgetc(f)) != EOF) {
-            if (c == '\n') {
-                count++;
-                offsets.push_back(ftell(f));
-            }
-        }
-        fclose(f);
-    }
-
-    if (count < MAX_LINES) {
-        // Simple append
-        f = fopen(LOG_PATH, "a");
-        if (f) {
-            fputs(line.c_str(), f);
-            fclose(f);
-        } else {
-            ESP_LOGE(TAG, "Failed to open %s for append", LOG_PATH);
-        }
-        return;
-    }
-
-    // Need to trim: drop oldest lines so we have MAX_LINES-1, then append new one
-    int drop = count - (MAX_LINES - 1);
-    if (drop < 1) drop = 1;
-    long keep_from = (drop < (int)offsets.size()) ? offsets[drop] : 0;
-
-    f = fopen(LOG_PATH, "r");
-    if (!f) {
-        ESP_LOGE(TAG, "Failed to open %s for trim read", LOG_PATH);
-        return;
-    }
-    fseek(f, keep_from, SEEK_SET);
-    std::string kept;
-    kept.reserve(MAX_LINES * 80);
-    char buf[256];
-    while (fgets(buf, sizeof(buf), f))
-        kept += buf;
-    fclose(f);
-
-    kept += line;
-
-    f = fopen(LOG_PATH, "w");
-    if (f) {
-        fputs(kept.c_str(), f);
+        fputs(line.c_str(), f);
         fclose(f);
     } else {
-        ESP_LOGE(TAG, "Failed to open %s for trim write", LOG_PATH);
+        ESP_LOGE(TAG, "Failed to open %s for append", LOG_PATH);
     }
 }
 
@@ -95,23 +162,33 @@ esp_err_t pair_log_serve(httpd_req_t *req)
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"pairing_log.txt\"");
 
-    FILE *f = fopen(LOG_PATH, "r");
-    if (!f) {
-        httpd_resp_sendstr(req, "");
-        return ESP_OK;
+    // Oldest part first. Not locked against appends: a rotation during a download can at worst
+    // duplicate or skip a few lines in that download, and holding the lock while sending over a
+    // slow connection would block the radio task.
+    char buf[COPY_CHUNK];
+    for (int n = PART_COUNT - 1; n >= 0; n--) {
+        FILE *f = fopen(part_path(n).c_str(), "r");
+        if (!f)
+            continue;
+        size_t len;
+        esp_err_t err = ESP_OK;
+        while (err == ESP_OK && (len = fread(buf, 1, sizeof(buf), f)) > 0)
+            err = httpd_resp_send_chunk(req, buf, len);
+        fclose(f);
+        if (err != ESP_OK)
+            return err; // client went away
     }
-
-    char buf[256];
-    while (fgets(buf, sizeof(buf), f))
-        httpd_resp_sendstr_chunk(req, buf);
-    fclose(f);
-    httpd_resp_sendstr_chunk(req, nullptr); // end chunked response
+    httpd_resp_send_chunk(req, nullptr, 0); // end chunked response
     return ESP_OK;
 }
 
 esp_err_t pair_log_clear(httpd_req_t *req)
 {
-    remove(LOG_PATH);
+    {
+        std::lock_guard<std::mutex> guard(s_lock);
+        for (int n = 0; n < PART_COUNT; n++)
+            remove(part_path(n).c_str());
+    }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"cleared\"}");
     return ESP_OK;

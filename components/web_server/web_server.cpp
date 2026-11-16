@@ -1,4 +1,7 @@
 #include "web_server.h"
+#include "boot_info.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "pair_log.h"
 #include "oled_display.h"
 #include <cmath>
@@ -24,6 +27,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <format>
+#include <atomic>
 #include <list>
 #include <cmath>
 #include <ctime>
@@ -100,11 +104,39 @@ static void strip_ansi(const char *src, char *dst, size_t dst_size)
     dst[j] = '\0';
 }
 
+// Below these limits no log lines are forwarded to the browser or syslog; the serial console
+// still gets everything. Forwarding needs memory itself, and when it fails it logs an error,
+// which would be forwarded again (a laptop that went to sleep with the log page open caused
+// exactly that loop and left the board without memory for 40 hours).
+#define LOG_FWD_MIN_FREE_HEAP     (16 * 1024)
+#define LOG_FWD_MIN_LARGEST_BLOCK (8 * 1024)
+
+/// True when the current task is the web server's own task (lines logged there — socket and
+/// WebSocket send errors — are about the browser connection itself and must not be sent to it).
+static bool in_httpd_task()
+{
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED || xPortInIsrContext())
+        return false;
+    const char *name = pcTaskGetName(nullptr);
+    return name && strncmp(name, "httpd", 5) == 0;
+}
+
+bool web_server_memory_low(void)
+{
+    return esp_get_free_heap_size() < LOG_FWD_MIN_FREE_HEAP ||
+           heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < LOG_FWD_MIN_LARGEST_BLOCK;
+}
+
 static int web_log_vprintf(const char *fmt, va_list args)
 {
     va_list copy;
     va_copy(copy, args);
     int ret = s_orig_vprintf(fmt, args);
+    if (s_log_queue && (in_httpd_task() || web_server_memory_low())) {
+        s_log_drop_count++;
+        va_end(copy);
+        return ret;
+    }
     if (s_log_queue) {
         bool has_clients = false;
         for (int i = 0; i < WS_MAX_CLIENTS; i++)
@@ -144,9 +176,15 @@ struct ws_send_job {
     char   buf[]; // flexible array — payload follows the struct
 };
 
+// WebSocket messages waiting for the httpd task. Each one is a heap block plus a message on the
+// httpd control socket; when the browser stops reading (sleeping laptop) they must not pile up.
+#define WS_MAX_PENDING_JOBS 8
+static std::atomic<int> s_ws_pending_jobs{0};
+
 static void ws_send_job_fn(void *arg)
 {
     ws_send_job *job = static_cast<ws_send_job *>(arg);
+    s_ws_pending_jobs.fetch_sub(1);
 
     // Guard 1: check our own table first. A previous queued job may have already
     // marked this fd dead and removed it; if so, skip immediately without touching httpd.
@@ -180,14 +218,32 @@ static void ws_send_job_fn(void *arg)
 
 static void ws_send_str(int fd, const char *str)
 {
+    if (s_ws_pending_jobs.load() >= WS_MAX_PENDING_JOBS)
+        return; // browser is not keeping up — drop rather than queue more memory
     size_t len = strlen(str);
     ws_send_job *job = static_cast<ws_send_job *>(malloc(sizeof(ws_send_job) + len + 1));
     if (!job) return;
     job->fd  = fd;
     job->len = len;
     memcpy(job->buf, str, len + 1);
-    if (httpd_queue_work(s_server, ws_send_job_fn, job) != ESP_OK)
+    s_ws_pending_jobs.fetch_add(1);
+    if (httpd_queue_work(s_server, ws_send_job_fn, job) != ESP_OK) {
+        s_ws_pending_jobs.fetch_sub(1);
         free(job); // queue full — drop message, keep connection alive
+    }
+}
+
+void web_server_connection_counts(int *ws_clients, int *open_sockets)
+{
+    int ws = 0;
+    for (int i = 0; i < WS_MAX_CLIENTS; i++)
+        if (s_ws_fds[i] != -1) ws++;
+    int fds[16];
+    size_t n = sizeof(fds) / sizeof(fds[0]);
+    if (!s_server || httpd_get_client_list(s_server, &n, fds) != ESP_OK)
+        n = 0;
+    if (ws_clients) *ws_clients = ws;
+    if (open_sockets) *open_sockets = (int)n;
 }
 
 static esp_err_t ws_handler(httpd_req_t *req)
@@ -330,7 +386,7 @@ static void json_escape(const char *src, char *dst, size_t dst_size)
 
 void web_server_broadcast_log(const char *message)
 {
-    if (!s_server) return;
+    if (!s_server || web_server_memory_low()) return;
     const char *level = log_classify(message);
     char escaped[400]; // up to 2× source for worst-case escaping
     json_escape(message, escaped, sizeof(escaped));
@@ -3236,6 +3292,26 @@ static esp_err_t api_info_get(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "compile_time", desc->time);
     cJSON_AddStringToObject(obj, "idf_ver",      desc->idf_ver);
     cJSON_AddStringToObject(obj, "board",        CONFIG_BOARD_NAME);
+
+    // Restart diagnostics
+    const boot_info_t *bi = boot_info_get();
+    cJSON_AddNumberToObject(obj, "uptime_s",      boot_info_uptime_s());
+    cJSON_AddStringToObject(obj, "reset_reason",  bi->reason);
+    cJSON_AddNumberToObject(obj, "boot_count",    bi->boot_count);
+    if (bi->prev_valid) {
+        cJSON_AddNumberToObject(obj, "prev_uptime_s", bi->prev_uptime_s);
+        cJSON_AddNumberToObject(obj, "prev_heap_min", bi->prev_heap_min);
+        cJSON_AddNumberToObject(obj, "prev_alloc_fail", bi->prev_fail_count);
+        if (bi->prev_fail_count > 0) {
+            cJSON_AddNumberToObject(obj, "prev_alloc_fail_size", bi->prev_fail_size);
+            cJSON_AddStringToObject(obj, "prev_alloc_fail_task", bi->prev_fail_task);
+            cJSON_AddNumberToObject(obj, "prev_alloc_fail_at_s", bi->prev_fail_uptime_s);
+        }
+    }
+    cJSON_AddNumberToObject(obj, "alloc_fail", boot_info_fail_count());
+    cJSON_AddNumberToObject(obj, "heap_largest",  heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    cJSON_AddNumberToObject(obj, "heap_free",     esp_get_free_heap_size());
+    cJSON_AddNumberToObject(obj, "heap_min",      esp_get_minimum_free_heap_size());
 
     FILE *vf = fopen(WEB_BASE_PATH "/version.json", "r");
     if (vf) {
