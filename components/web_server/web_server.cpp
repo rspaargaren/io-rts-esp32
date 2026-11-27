@@ -1,4 +1,7 @@
 #include "web_server.h"
+#include "boot_info.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "pair_log.h"
 #include "oled_display.h"
 #include <cmath>
@@ -24,6 +27,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <format>
+#include <atomic>
 #include <list>
 #include <cmath>
 #include <ctime>
@@ -100,24 +104,78 @@ static void strip_ansi(const char *src, char *dst, size_t dst_size)
     dst[j] = '\0';
 }
 
+// Below these limits no log lines are forwarded to the browser or syslog; the serial console
+// still gets everything. Forwarding needs memory itself, and when it fails it logs an error,
+// which would be forwarded again (a laptop that went to sleep with the log page open caused
+// exactly that loop and left the board without memory for 40 hours).
+#define LOG_FWD_MIN_FREE_HEAP     (16 * 1024)
+#define LOG_FWD_MIN_LARGEST_BLOCK (8 * 1024)
+
+/// True when the current task is the web server's own task.
+static bool in_httpd_task()
+{
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED || xPortInIsrContext())
+        return false;
+    const char *name = pcTaskGetName(nullptr);
+    return name && strncmp(name, "httpd", 5) == 0;
+}
+
+// Set while ws_send_job_fn sends a frame. It only runs in the (single) httpd task.
+static volatile bool s_in_ws_send = false;
+
+/// True for a formatted line ("W (123) tag: ...") whose tag starts with "httpd".
+static bool line_tag_is_httpd(const char *line)
+{
+    const char *p = strchr(line, ')');
+    return p && p[1] == ' ' && strncmp(p + 2, "httpd", 5) == 0;
+}
+
+// First byte of a queued line that must go to syslog only, not to the browser
+#define LOG_SYSLOG_ONLY_MARK '\x01'
+
+bool web_server_memory_low(void)
+{
+    return esp_get_free_heap_size() < LOG_FWD_MIN_FREE_HEAP ||
+           heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < LOG_FWD_MIN_LARGEST_BLOCK;
+}
+
 static int web_log_vprintf(const char *fmt, va_list args)
 {
     va_list copy;
     va_copy(copy, args);
     int ret = s_orig_vprintf(fmt, args);
     if (s_log_queue) {
+        // Cheap check first: nothing to do when nobody listens
         bool has_clients = false;
         for (int i = 0; i < WS_MAX_CLIENTS; i++)
             if (s_ws_fds[i] != -1) { has_clients = true; break; }
         if (!has_clients && !syslog_is_active()) { va_end(copy); return ret; }
+        if (web_server_memory_low()) {
+            s_log_drop_count++;
+            va_end(copy);
+            return ret;
+        }
         char raw[LOG_LINE_MAX];
         vsnprintf(raw, sizeof(raw), fmt, copy);
-        char line[LOG_LINE_MAX];
-        strip_ansi(raw, line, sizeof(line));
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-            line[--len] = '\0';
-        if (len > 0 && xQueueSend(s_log_queue, line, 0) != pdTRUE)
+        // line[0] is reserved for LOG_SYSLOG_ONLY_MARK; the text starts at line[1]. One extra byte
+        // so that queueing LOG_LINE_MAX bytes from line + 1 stays inside the buffer.
+        char line[LOG_LINE_MAX + 1];
+        strip_ansi(raw, line + 1, LOG_LINE_MAX);
+        int len = (int)strlen(line + 1);
+        while (len > 0 && (line[len] == '\n' || line[len] == '\r'))
+            line[len--] = '\0';
+        // Lines about the browser connection itself (WebSocket send errors, httpd socket errors)
+        // must not be sent to the browser: when it stops reading, every failed send would log a
+        // new line to send. They still go to syslog. Other lines logged in the httpd task (e.g.
+        // radio lines of a command started from the web UI) are forwarded as usual.
+        bool syslog_only = in_httpd_task() && (s_in_ws_send || line_tag_is_httpd(line + 1));
+        const char *item = line + 1;
+        if (syslog_only) {
+            line[0] = LOG_SYSLOG_ONLY_MARK;
+            line[LOG_LINE_MAX - 1] = '\0'; // the mark takes one byte of the queue item
+            item = line;
+        }
+        if (len > 0 && (!syslog_only || syslog_is_active()) && xQueueSend(s_log_queue, item, 0) != pdTRUE)
             s_log_drop_count++;
     }
     va_end(copy);
@@ -129,6 +187,10 @@ static void log_drain_task(void *)
     char line[LOG_LINE_MAX];
     while (true) {
         if (xQueueReceive(s_log_queue, line, portMAX_DELAY) == pdTRUE) {
+            if (line[0] == LOG_SYSLOG_ONLY_MARK) {
+                syslog_send(line + 1);
+                continue;
+            }
             web_server_broadcast_log(line);
             syslog_send(line);
         }
@@ -140,13 +202,22 @@ static void log_drain_task(void *)
 // Job queued to the httpd task so the send always happens in the right context.
 struct ws_send_job {
     int    fd;
+    int    slot; // index in s_ws_fds / s_ws_pending_jobs when queued
     size_t len;
     char   buf[]; // flexible array — payload follows the struct
 };
 
+// WebSocket messages waiting for the httpd task, counted per client slot. Each one is a heap
+// block plus a message on the httpd control socket; when a browser stops reading (sleeping
+// laptop) its messages must not pile up. Counting per client means a stalled browser only
+// loses its own messages: the others still get position and status updates.
+#define WS_MAX_PENDING_PER_CLIENT 6
+static std::atomic<int> s_ws_pending_jobs[WS_MAX_CLIENTS];
+
 static void ws_send_job_fn(void *arg)
 {
     ws_send_job *job = static_cast<ws_send_job *>(arg);
+    s_ws_pending_jobs[job->slot].fetch_sub(1);
 
     // Guard 1: check our own table first. A previous queued job may have already
     // marked this fd dead and removed it; if so, skip immediately without touching httpd.
@@ -168,26 +239,54 @@ static void ws_send_job_fn(void *arg)
     frame.type    = HTTPD_WS_TYPE_TEXT;
     frame.payload = (uint8_t *)job->buf;
     frame.len     = job->len;
+    s_in_ws_send = true;
     esp_err_t err = httpd_ws_send_frame_async(s_server, job->fd, &frame);
+    s_in_ws_send = false;
     if (err != ESP_OK) {
+        s_in_ws_send = true; // this warning is about the connection itself: not to the browser
         ESP_LOGW(TAG, "ws_send fd=%d err=%s — removing client", job->fd, esp_err_to_name(err));
         for (int i = 0; i < WS_MAX_CLIENTS; i++)
             if (s_ws_fds[i] == job->fd) { s_ws_fds[i] = -1; break; }
         httpd_sess_trigger_close(s_server, job->fd);
+        s_in_ws_send = false;
     }
     free(job);
 }
 
 static void ws_send_str(int fd, const char *str)
 {
+    int slot = -1;
+    for (int i = 0; i < WS_MAX_CLIENTS; i++)
+        if (s_ws_fds[i] == fd) { slot = i; break; }
+    if (slot < 0)
+        return; // not a tracked client (ws_send_job_fn would drop it anyway)
+    if (s_ws_pending_jobs[slot].load() >= WS_MAX_PENDING_PER_CLIENT)
+        return; // this browser is not keeping up — drop rather than queue more memory
     size_t len = strlen(str);
     ws_send_job *job = static_cast<ws_send_job *>(malloc(sizeof(ws_send_job) + len + 1));
     if (!job) return;
-    job->fd  = fd;
-    job->len = len;
+    job->fd   = fd;
+    job->slot = slot;
+    job->len  = len;
     memcpy(job->buf, str, len + 1);
-    if (httpd_queue_work(s_server, ws_send_job_fn, job) != ESP_OK)
+    s_ws_pending_jobs[slot].fetch_add(1);
+    if (httpd_queue_work(s_server, ws_send_job_fn, job) != ESP_OK) {
+        s_ws_pending_jobs[slot].fetch_sub(1);
         free(job); // queue full — drop message, keep connection alive
+    }
+}
+
+void web_server_connection_counts(int *ws_clients, int *open_sockets)
+{
+    int ws = 0;
+    for (int i = 0; i < WS_MAX_CLIENTS; i++)
+        if (s_ws_fds[i] != -1) ws++;
+    int fds[16];
+    size_t n = sizeof(fds) / sizeof(fds[0]);
+    if (!s_server || httpd_get_client_list(s_server, &n, fds) != ESP_OK)
+        n = 0;
+    if (ws_clients) *ws_clients = ws;
+    if (open_sockets) *open_sockets = (int)n;
 }
 
 static esp_err_t ws_handler(httpd_req_t *req)
@@ -330,7 +429,7 @@ static void json_escape(const char *src, char *dst, size_t dst_size)
 
 void web_server_broadcast_log(const char *message)
 {
-    if (!s_server) return;
+    if (!s_server || web_server_memory_low()) return;
     const char *level = log_classify(message);
     char escaped[400]; // up to 2× source for worst-case escaping
     json_escape(message, escaped, sizeof(escaped));
@@ -3236,6 +3335,26 @@ static esp_err_t api_info_get(httpd_req_t *req)
     cJSON_AddStringToObject(obj, "compile_time", desc->time);
     cJSON_AddStringToObject(obj, "idf_ver",      desc->idf_ver);
     cJSON_AddStringToObject(obj, "board",        CONFIG_BOARD_NAME);
+
+    // Restart diagnostics
+    const boot_info_t *bi = boot_info_get();
+    cJSON_AddNumberToObject(obj, "uptime_s",      boot_info_uptime_s());
+    cJSON_AddStringToObject(obj, "reset_reason",  bi->reason);
+    cJSON_AddNumberToObject(obj, "boot_count",    bi->boot_count);
+    if (bi->prev_valid) {
+        cJSON_AddNumberToObject(obj, "prev_uptime_s", bi->prev_uptime_s);
+        cJSON_AddNumberToObject(obj, "prev_heap_min", bi->prev_heap_min);
+        cJSON_AddNumberToObject(obj, "prev_alloc_fail", bi->prev_fail_count);
+        if (bi->prev_fail_count > 0) {
+            cJSON_AddNumberToObject(obj, "prev_alloc_fail_size", bi->prev_fail_size);
+            cJSON_AddStringToObject(obj, "prev_alloc_fail_task", bi->prev_fail_task);
+            cJSON_AddNumberToObject(obj, "prev_alloc_fail_at_s", bi->prev_fail_uptime_s);
+        }
+    }
+    cJSON_AddNumberToObject(obj, "alloc_fail", boot_info_fail_count());
+    cJSON_AddNumberToObject(obj, "heap_largest",  heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    cJSON_AddNumberToObject(obj, "heap_free",     esp_get_free_heap_size());
+    cJSON_AddNumberToObject(obj, "heap_min",      esp_get_minimum_free_heap_size());
 
     FILE *vf = fopen(WEB_BASE_PATH "/version.json", "r");
     if (vf) {

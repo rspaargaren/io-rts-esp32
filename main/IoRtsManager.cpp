@@ -65,10 +65,9 @@ namespace IoRts
             level = '?';
             break;
         }
+        // The web log already receives this line through the ESP_LOGx call above (log hook in the
+        // web server); broadcasting it here as well showed every radio line twice.
         if (sMqttHelper != nullptr) sMqttHelper->SendLog(std::format("{} {}: {}", level, tag, log));
-#if CONFIG_WEB_ENABLED
-        web_server_broadcast_log(std::format("{} {}: {}", level, tag, log).c_str());
-#endif
     }
 
     static void deviceStatusCallback(const std::string deviceID, const iohome::IoDevice &device)

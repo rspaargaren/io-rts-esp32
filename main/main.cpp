@@ -10,6 +10,7 @@
 #include "CmdLineManagement.hpp"
 #include "oled_display.h"
 #include "web_server.h"
+#include "boot_info.h"
 
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -77,6 +78,9 @@ extern "C" void app_main(void)
     esp_err_t err = Config::InitHardware();
     ESP_ERROR_CHECK(err);
 
+    // Restart reason, boot counter and previous-run data (needs NVS, so after InitHardware)
+    boot_info_init();
+
 #if CONFIG_WIFI_RESET_GPIO >= 0
     xTaskCreate(wifi_reset_gpio_task, "wifi_rst_gpio", 2048, nullptr,
                 tskIDLE_PRIORITY + 2, nullptr);
@@ -142,7 +146,6 @@ extern "C" void app_main(void)
 
 #if CONFIG_WEB_ENABLED
     web_server_start(&ioRtsManager);
-    pair_log_append("BOOT");
 #endif
 
     // Register IO command handlers now that the manager is ready
@@ -152,6 +155,15 @@ extern "C" void app_main(void)
     oled_show_status("Ready");
 #endif
 
+    // Keep the restart diagnostics up to date; the BOOT log line waits for the clock to be set
     while (true)
-        vTaskDelay(pdMS_TO_TICKS(60000));
+    {
+        boot_info_sample();
+#if CONFIG_WEB_ENABLED
+        boot_info_log_boot_when_ready();
+        boot_info_log_heap_periodic();
+        boot_info_memory_watchdog();
+#endif
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
 }

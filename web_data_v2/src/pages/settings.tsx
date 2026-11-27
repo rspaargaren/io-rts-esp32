@@ -8,6 +8,7 @@ import { ControllerSettings } from "../components/settings/Controller";
 import { IoSystemKeySettings } from "../components/settings/IoSystemKey";
 import { OtaKeySettings } from "../components/settings/OtaKey";
 import { FirmwareSettings } from "../components/settings/Firmware";
+import { RestartSettings } from "../components/settings/Restarts";
 import { WebUISettings } from "../components/settings/WebUi";
 import { WebUIUpdateSettings } from "../components/settings/WebUiUpdate";
 import { BackupSettings } from "../components/settings/Backup";
@@ -18,7 +19,7 @@ import { DisplaySettings } from "../components/settings/Display";
 import { useInfo } from "../hooks/api/useInfo";
 
 export function Settings() {
-  const infoData = useInfo();
+  const infoData = useInfo(30); // refresh so uptime and free memory stay current
   return (
     <section class="view active">
       <div class="view-header">
@@ -70,6 +71,7 @@ export function Settings() {
         <div class="settings-card">
           <DisplaySettings />
           <FirmwareSettings data={infoData.data} />
+          <RestartSettings data={infoData.data} />
           <WebUISettings data={infoData.data} />
           <WebUIUpdateSettings />
           <FirmwareUpdateSettings />
