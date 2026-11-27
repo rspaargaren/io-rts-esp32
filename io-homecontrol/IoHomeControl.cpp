@@ -1227,35 +1227,70 @@ namespace iohome
               {
               // We have received a challenge, let's send our key!
               IoFrame keyTransfer;
-              // Solar/battery devices need the long wake-up preamble on the key transfer too (same issue as CMD 3D in v2.1.3):
-              // right after sending CMD 3C their radio is still switching back to RX, so a short-preamble CMD 32 is missed and
-              // CMD 33 never comes. Flag the frame as low power so SendAndReceive uses LONG_PREAMBLE_LENGTH.
+              // Solar motors (for example Somfy RS100 SOLAR IO) listen only a few ms after they send the
+              // 0x3C challenge. Through SendAndReceive the key transfer (32-byte preamble) arrives too late,
+              // the motor goes back to sleep and never answers with CMD 33, and the later retries with a
+              // short preamble miss its wake-up. So send the key right away with a short preamble, and only
+              // when the motor stays silent try longer preambles, ending with the long wake-up preamble that
+              // catches the motor's next listen window. The low-power bit matches what a real controller sends.
               bool keyConfirmed = false;
+              bool keyRejected = false;
               if (create_key_transfer(keyTransfer, request, device.info.node_id, mOwnNodeId, mSystemKey, rxItem.frame.data))
               {
-                keyTransfer.ctrl_byte_1 |= CTRL1_LOW_POWER; // same frame bits as a real controller sends
-                // Solar motors (for example Somfy RS100 SOLAR IO) listen only a few ms after they send the
-                // 0x3C challenge. The normal preamble (32 bytes, or the long wake-up preamble) comes too late
-                // and the motor never answers with CMD 33. So send the key right away with a short preamble,
-                // and only try the longer preambles when the motor stays silent.
-                static const uint16_t preambles[] = {12, 12, 16, SHORT_PREAMBLE_LENGTH, LONG_PREAMBLE_LENGTH};
+                keyTransfer.ctrl_byte_1 |= CTRL1_LOW_POWER;
+                static const uint16_t preambles[] = {12, 16, SHORT_PREAMBLE_LENGTH, LONG_PREAMBLE_LENGTH};
+                const TickType_t attemptTimeout = pdMS_TO_TICKS(700);
+                int attempts = 0;
                 for (uint16_t preamble : preambles)
                 {
                   if (!TransmitFrame(keyTransfer, FREQUENCY_CHANNEL_2, preamble))
                     continue;
-                  RxFrameQueueItem confirm;
-                  TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(700);
-                  while (!keyConfirmed && xTaskGetTickCount() < deadline
-                         && xQueueReceive(sRxIoQueue, &confirm, deadline - xTaskGetTickCount()))
+                  attempts++;
+                  // Wait for any frame from this device to us. ReceiveMatchingFrame uses an esp_timer
+                  // deadline (no tick wrap-around) and puts frames from other devices back in the queue.
+                  RxFrameQueueItem reply;
+                  if (!ReceiveMatchingFrame(device.info.node_id, mOwnNodeId, -1, attemptTimeout, reply))
+                    continue; // silent: try the next, longer preamble
+
+                  if (reply.frame.command_id == CMD_CHALLENGE_REQUEST && reply.frame.data_len == HMAC_SIZE)
                   {
-                    keyConfirmed = confirm.frame.command_id == CMD_KEY_TRANSFER_CONFIRMATION
-                                   && memcmp(confirm.frame.src_node, device.info.node_id, NODE_ID_SIZE) == 0;
+                    // The device wants the key transfer authenticated first (as SendAndReceive handled it)
+                    IoFrame challengeResponse;
+                    if (!create_challenge_response(challengeResponse, device.info.node_id, mOwnNodeId, reply.frame.data, keyTransfer, mSystemKey))
+                    {
+                      IO_LOGE("DiscoverAndPairDevice: failed to create challenge response for key transfer");
+                      break;
+                    }
+                    challengeResponse.ctrl_byte_0 |= CTRL0_START;
+                    if (!TransmitFrame(challengeResponse, FREQUENCY_CHANNEL_2, preamble)
+                        || !ReceiveMatchingFrame(device.info.node_id, mOwnNodeId, -1, attemptTimeout, reply))
+                      continue;
                   }
-                  if (keyConfirmed)
+
+                  if (reply.frame.command_id == CMD_KEY_TRANSFER_CONFIRMATION)
                   {
-                    memcpy(&response, &confirm.frame, sizeof(response));
+                    memcpy(&response, &reply.frame, sizeof(response));
+                    keyConfirmed = true;
+                    IO_LOGI("DiscoverAndPairDevice: key confirmed (attempt {}, preamble {} bytes)", attempts, preamble);
                     break;
                   }
+                  if (reply.frame.command_id == CMD_ERROR_RESPONSE)
+                  {
+                    // Explicit rejection: resending the same frame will not help
+                    IO_LOGE("DiscoverAndPairDevice: key transfer rejected by device, error 0x{:02X}",
+                            reply.frame.data_len > 0 ? reply.frame.data[0] : 0);
+                    keyRejected = true;
+                    break;
+                  }
+                  IO_LOGW("DiscoverAndPairDevice: unexpected reply 0x{:02X} to key transfer", reply.frame.command_id);
+                }
+
+                // With more than one key transfer sent, the device may confirm a second time. Remove that
+                // late CMD 33 so the sub-device discovery below does not stop on it.
+                if (keyConfirmed && attempts > 1)
+                {
+                  RxFrameQueueItem duplicate;
+                  ReceiveMatchingFrame(device.info.node_id, mOwnNodeId, CMD_KEY_TRANSFER_CONFIRMATION, pdMS_TO_TICKS(150), duplicate);
                 }
               }
               if (keyConfirmed)
@@ -1326,7 +1361,10 @@ namespace iohome
               }
               else
               {
-                IO_LOGE("DiscoverAndPairDevice: key exchange failed — CMD 33 not received");
+                if (keyRejected)
+                  IO_LOGE("DiscoverAndPairDevice: key exchange failed — device rejected the key transfer");
+                else
+                  IO_LOGE("DiscoverAndPairDevice: key exchange failed — CMD 33 not received");
               }
             }
           }
