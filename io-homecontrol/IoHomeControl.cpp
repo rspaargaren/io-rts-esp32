@@ -2077,6 +2077,26 @@ namespace iohome
     }
   }
 
+  bool IoHomeControl::SetDeviceLowPower(const std::string &deviceID, bool lowPower)
+  {
+    bool found = false;
+    if (xSemaphoreTake(sMutex, MUTEX_MAX_WAIT_TICKS))
+    {
+      auto it = sDeviceMap.find(deviceID);
+      if (it != sDeviceMap.end())
+      {
+        it->second.info.is_low_power = lowPower;
+        found = true;
+      }
+      xSemaphoreGive(sMutex);
+    }
+    else
+    {
+      IO_LOGE("SetDeviceLowPower: failed to take mutex!");
+    }
+    return found;
+  }
+
   bool IoHomeControl::SendRaw(const std::string &rawFrame, uint32_t frequency)
   {
     if (!mInitialized || !mReceiving || mPassiveMode)
