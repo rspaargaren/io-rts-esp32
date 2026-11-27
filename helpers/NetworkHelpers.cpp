@@ -127,6 +127,10 @@ namespace Helpers
     static bool  sHadSuccessfulConn = false;
     static bool  sFallbackApRunning = false;
     static uint8_t sLastDisconnectReason = 0;
+    // Minimum-RSSI filter fallback (see the STA_DISCONNECTED handler)
+    static constexpr int RSSI_THRESHOLD_MAX_FAILURES = 2;
+    static int   sRssiThresholdFailures = 0;
+    static bool  sRssiFilterRelaxed     = false;
     static esp_timer_handle_t sFallbackApTimer  = nullptr;
     static uint64_t sFallbackApTimerStartUs = 0;
     static esp_timer_handle_t sReconnectTimer   = nullptr;
@@ -208,7 +212,7 @@ namespace Helpers
                  sCfgApSsid.c_str(), ap_secured ? "WPA2" : "OPEN");
 
 #if CONFIG_OLED_ENABLED
-        oled_show_status("WiFi:io-rts-setup");
+        oled_show_status(("WiFi:" + sCfgApSsid).c_str());
 #endif
 
         if (sCfgApTimeoutS > 0) {
@@ -340,6 +344,31 @@ namespace Helpers
             wifi_event_sta_disconnected_t *evt = (wifi_event_sta_disconnected_t *)event_data;
             sLastDisconnectReason = evt->reason;
             sWifiRetryCount++;
+            // CONFIG_WIFI_STA_MIN_RSSI skips weak APs so the strongest one wins. When the only AP is
+            // weaker than that (a controller at the edge of the house), it would never connect again.
+            // After a few such failures drop the filter for the rest of this run; the strongest AP is
+            // still chosen first (WIFI_CONNECT_AP_BY_SIGNAL).
+            if (evt->reason == WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD && !sRssiFilterRelaxed)
+            {
+                if (++sRssiThresholdFailures >= RSSI_THRESHOLD_MAX_FAILURES)
+                {
+                    wifi_config_t cfg;
+                    if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK)
+                    {
+                        cfg.sta.threshold.rssi = -127;
+                        if (esp_wifi_set_config(WIFI_IF_STA, &cfg) == ESP_OK)
+                        {
+                            sRssiFilterRelaxed = true;
+                            ESP_LOGW(TAG, "No AP stronger than %d dBm found %d times: accepting any signal level",
+                                     CONFIG_WIFI_STA_MIN_RSSI, sRssiThresholdFailures);
+                        }
+                    }
+                }
+            }
+            else if (evt->reason != WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD)
+            {
+                sRssiThresholdFailures = 0;
+            }
             // Backoff ladder: retry quickly at first (most dropouts are transient),
             // then stretch out so a long router outage doesn't hammer the radio.
             int delay_ms;

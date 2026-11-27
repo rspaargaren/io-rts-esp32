@@ -604,19 +604,24 @@ namespace Helpers
 
     /// @brief true when a and b drive the same axis of the same device, so the newer one makes the older moot.
     /// Tilt is its own axis: a venetian blind gets a position and a tilt command per scene, and one must
-    /// not cancel the other. IDENTIFY moves nothing for good and never supersedes anything.
+    /// not cancel the other. STOP halts every axis, so it supersedes a pending tilt too (and the other
+    /// way round). IDENTIFY moves nothing for good and never supersedes anything.
     static bool SameTarget(const MqttCmd &a, const MqttCmd &b)
     {
         using T = MqttHelpers::MqttCmdType;
         if (a.type == T::IDENTIFY || b.type == T::IDENTIFY)
             return false;
-        return strcmp(a.device_id, b.device_id) == 0 && (a.type == T::TILT) == (b.type == T::TILT);
+        if (strcmp(a.device_id, b.device_id) != 0)
+            return false;
+        if (a.type == T::STOP || b.type == T::STOP)
+            return true;
+        return (a.type == T::TILT) == (b.type == T::TILT);
     }
 
     enum class CmdResult { OK, FAILED, REJECTED };
 
     /// @brief Run one queued command over RF.
-    /// @return OK when the device authenticated it, REJECTED when it can never succeed (unknown/inactive
+    /// @return OK when the device authenticated it, REJECTED when it can never succeed (deleted
     ///         device), FAILED otherwise — worth sending again.
     static CmdResult ExecuteCommand(MqttHelpers *self, IoRts::IoRtsManager *mgr, const MqttCmd &cmd)
     {
@@ -626,10 +631,15 @@ namespace Helpers
         {
             std::lock_guard<std::mutex> g(mgr->mIoDevicesMutex);
             auto it = mgr->mIoDevices.find(devId);
-            if (it == mgr->mIoDevices.end() || it->second.is_deleted)
-                return CmdResult::REJECTED;
-            quiet    = it->second.quiet;
-            inverted = it->second.info.is_openclose_inverted;
+            if (it != mgr->mIoDevices.end())
+            {
+                if (it->second.is_deleted)
+                    return CmdResult::REJECTED;
+                quiet    = it->second.quiet;
+                inverted = it->second.info.is_openclose_inverted;
+            }
+            // Not (yet) in the manager's list, e.g. right after pairing: send it anyway with the
+            // defaults, as before. The radio layer knows the device or fails the call quickly.
         }
         bool ok = false;
         switch (cmd.type)
@@ -644,7 +654,9 @@ namespace Helpers
                 break;
             case T::STOP:
                 ok = mgr->StopDevice(devId);
-                if (ok && mgr->StopMoveTracking(devId))
+                // Always stop the estimate locally: a missed authenticated reply does not mean the
+                // motor kept moving, and an estimate that runs on to the old target is worse.
+                if (mgr->StopMoveTracking(devId))
                     self->SendIoDeviceStatus(devId); // publish retained position for 1W (no device feedback)
                 break;
             case T::ON:
@@ -757,7 +769,7 @@ namespace Helpers
                                  CmdName(cmd.type), cmd.device_id, cmd.requeues);
                     break;
                 case CmdResult::REJECTED:
-                    ESP_LOGW(TAG, "MQTT %s for %s REJECTED: unknown or inactive device",
+                    ESP_LOGW(TAG, "MQTT %s for %s REJECTED: device is deleted",
                              CmdName(cmd.type), cmd.device_id);
                     break;
                 case CmdResult::FAILED:
@@ -779,6 +791,8 @@ namespace Helpers
         }
     }
 
+    static bool RegisterNetworkHandlers(MqttHelpers *self);
+
     MqttHelpers::MqttHelpers(IoRts::IoRtsManager *manager)
         : mIoRtsManager(manager), mStarted(false), mMqttClientHandle(nullptr), mReconnectTimer(nullptr)
     {
@@ -786,21 +800,42 @@ namespace Helpers
         mDiscoveryPrefix = MqttConfig::GetDiscoveryPrefix();
         // Register network event handlers once here — they survive client restarts and must exist
         // before the first StartMqttClient call so events from the network task are never missed.
+        // If the default event loop does not exist yet, StartMqttClient tries again.
+        mNetworkHandlersRegistered = RegisterNetworkHandlers(this);
+    }
+
+    /// @brief Register the network up/down handlers. Registering a handler that is already registered
+    /// only updates its argument, so calling this again after a partial failure is safe.
+    /// @return true when every registration succeeded
+    static bool RegisterNetworkHandlers(MqttHelpers *self)
+    {
+        bool ok = true;
+        auto reg = [&](esp_event_base_t base, int32_t id) {
+            esp_err_t err = esp_event_handler_register(base, id, &mqtt_network_event_handler, self);
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Failed to register network event handler (%s)", esp_err_to_name(err));
+                ok = false;
+            }
+        };
 #ifdef CONFIG_CONNECTIVITY_CHOICE_WIFI
-        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &mqtt_network_event_handler, this);
-        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &mqtt_network_event_handler, this);
+        reg(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED);
+        reg(IP_EVENT, IP_EVENT_STA_GOT_IP);
 #endif
 #ifdef CONFIG_CONNECTIVITY_CHOICE_ETH
-        esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &mqtt_network_event_handler, this);
-        esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &mqtt_network_event_handler, this);
+        reg(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED);
+        reg(IP_EVENT, IP_EVENT_ETH_GOT_IP);
 #endif
-        mNetworkHandlersRegistered = true;
+        return ok;
     }
+
     esp_err_t MqttHelpers::StartMqttClient()
     {
         std::lock_guard<std::recursive_mutex> lock(mLifecycleMutex);
         if (!MqttConfig::isEnabled() || mStarted)
             return ESP_ERR_NOT_ALLOWED;
+        if (!mNetworkHandlersRegistered)
+            mNetworkHandlersRegistered = RegisterNetworkHandlers(this);
         if (!NetworkHelpers::isConnected())
         {
             mMqttState = MqttState::CONNECTING;

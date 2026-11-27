@@ -17,9 +17,23 @@ export function BlindPane({
   const [lastPct, setLastPct] = useState(
     device.position >= 0 ? device.position : 0,
   );
+  // Touch: the pane is a vertical slider, the same direction the page scrolls. A drag starts
+  // only after the finger rests LONG_PRESS_MS without moving; moving earlier is a scroll.
   const touchStartY = useRef<number | null>(null);
   const touchDragging = useRef(false);
+  const touchMoved = useRef(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const DRAG_THRESHOLD = 10;
+  const LONG_PRESS_MS = 250;
+
+  const clearLongPress = () => {
+    if (longPressTimer.current !== null) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  useEffect(() => () => clearLongPress(), []); // unmount
 
   const pctFromEvent = useCallback((e: MouseEvent | TouchEvent) => {
     if (!paneRef.current) return 0;
@@ -73,31 +87,65 @@ export function BlindPane({
       void commitPosition(lastPct);
     };
 
+    const resetTouch = () => {
+      clearLongPress();
+      touchStartY.current = null;
+      touchDragging.current = false;
+      touchMoved.current = false;
+    };
+
+    // Abandon a touch drag without sending anything and show the real position again
+    const cancelTouchDrag = () => {
+      const wasDragging = touchDragging.current;
+      resetTouch();
+      if (wasDragging) {
+        setDragging(false);
+        setLastPct(device.position >= 0 ? device.position : 0);
+      }
+    };
+
     const handleTouchStart = (e: TouchEvent) => {
       if (!paneRef.current) return;
+      resetTouch();
       touchStartY.current = e.touches[0].clientY;
-      touchDragging.current = false;
-      applyDrag(pctFromEvent(e));
+      // Nothing changes on screen yet: the touch may still turn out to be a scroll
+      longPressTimer.current = setTimeout(() => {
+        longPressTimer.current = null;
+        if (touchStartY.current === null) return;
+        touchDragging.current = true;
+        setDragging(true);
+      }, LONG_PRESS_MS);
     };
 
     const handleTouchMove = (e: TouchEvent) => {
       if (touchStartY.current === null) return;
       if (!touchDragging.current) {
-        if (Math.abs(e.touches[0].clientY - touchStartY.current) < DRAG_THRESHOLD) return;
-        touchDragging.current = true;
-        setDragging(true);
+        // Moved before the long press fired: the user is scrolling, leave the gesture to the page
+        if (Math.abs(e.touches[0].clientY - touchStartY.current) >= DRAG_THRESHOLD) resetTouch();
+        return;
+      }
+      if (!e.cancelable) {
+        // The browser already scrolls this gesture; following the finger would move the blind
+        cancelTouchDrag();
+        return;
       }
       e.preventDefault();
+      touchMoved.current = true;
       applyDrag(pctFromEvent(e));
     };
 
     const handleTouchEnd = () => {
-      if (!touchDragging.current) { touchStartY.current = null; return; }
-      touchStartY.current = null;
-      touchDragging.current = false;
+      const commit = touchDragging.current && touchMoved.current;
+      const wasDragging = touchDragging.current;
+      resetTouch();
+      if (!wasDragging) return;
       setDragging(false);
-      void commitPosition(lastPct);
+      // A long press without moving is not a position change
+      if (commit) void commitPosition(lastPct);
+      else setLastPct(device.position >= 0 ? device.position : 0);
     };
+
+    const handleTouchCancel = () => cancelTouchDrag();
 
     const pane = paneRef.current;
     if (pane) {
@@ -108,6 +156,7 @@ export function BlindPane({
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
     document.addEventListener("touchend", handleTouchEnd);
+    document.addEventListener("touchcancel", handleTouchCancel);
 
     return () => {
       if (pane) {
@@ -118,8 +167,9 @@ export function BlindPane({
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
       document.removeEventListener("touchend", handleTouchEnd);
+      document.removeEventListener("touchcancel", handleTouchCancel);
     };
-  }, [dragging, lastPct, pctFromEvent, applyDrag, commitPosition]);
+  }, [dragging, lastPct, pctFromEvent, applyDrag, commitPosition, device.position]);
 
   const pos = lastPct;
 
