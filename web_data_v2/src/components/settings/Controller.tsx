@@ -15,8 +15,15 @@ export function ControllerSettings() {
       onSubmit={(e) => {
         e.preventDefault();
 
+        // Send proper JSON types: the firmware only accepts a number for tx_power and a
+        // boolean for passive_mode (a plain FormData object sent "17" and "on", so neither
+        // setting could be saved from the web UI).
         const fd = new FormData(e.currentTarget);
-        const data = Object.fromEntries(fd.entries());
+        const data = {
+          node_id: String(fd.get("node_id") ?? ""),
+          tx_power: Number(fd.get("tx_power") ?? 17),
+          passive_mode: fd.get("passive_mode") !== null,
+        };
 
         fetch("/api/io/config", {
           method: "POST",
@@ -26,8 +33,10 @@ export function ControllerSettings() {
             "X-OTA-Key": otaData.data?.key || "",
           },
         })
-          .then(() => {
+          .then((res) => {
+            if (!res.ok) throw new Error(String(res.status));
             showToast("toast.controller-saved", ToastType.SUCCESS);
+            api.refresh();
           })
           .catch(() => {
             showToast("toast.error-saving-controller", ToastType.ERROR);

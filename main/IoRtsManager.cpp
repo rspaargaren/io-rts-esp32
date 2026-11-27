@@ -65,10 +65,9 @@ namespace IoRts
             level = '?';
             break;
         }
+        // The web log already receives this line through the ESP_LOGx call above (log hook in the
+        // web server); broadcasting it here as well showed every radio line twice.
         if (sMqttHelper != nullptr) sMqttHelper->SendLog(std::format("{} {}: {}", level, tag, log));
-#if CONFIG_WEB_ENABLED
-        web_server_broadcast_log(std::format("{} {}: {}", level, tag, log).c_str());
-#endif
     }
 
     static void deviceStatusCallback(const std::string deviceID, const iohome::IoDevice &device)
@@ -228,9 +227,6 @@ namespace IoRts
                 state = dev.info.is_openclose_inverted ? "opening" : "closing";
             else if (dev.move_target_pos < dev.move_start_pos)
                 state = dev.info.is_openclose_inverted ? "closing" : "opening";
-#if CONFIG_WEB_ENABLED
-            web_server_broadcast_position(id.c_str(), estimated_int, false, true);
-#endif
             if (sMqttHelper != nullptr)
                 sMqttHelper->PublishEstimatedPosition(id, estimated_int, state);
 
@@ -245,6 +241,9 @@ namespace IoRts
                 }
                 dev.move_start_us = 0;
             }
+#if CONFIG_WEB_ENABLED
+            web_server_broadcast_position(id.c_str(), estimated_int, dev.is_stopped, true);
+#endif
         }
         sIoRtsManager->mIoDevicesMutex.unlock();
 
@@ -659,6 +658,10 @@ namespace IoRts
 
         if (!found)
             return false;
+
+        // Apply to the radio layer right away, not only after the next reboot
+        if (mIoHome != nullptr)
+            mIoHome->SetDeviceLowPower(deviceID, low_power);
 
         Helpers::StoredIoDevice stored;
         if (Helpers::DeviceStorage::LoadIoDevice(deviceID, stored) != ESP_OK)

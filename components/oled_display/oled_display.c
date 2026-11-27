@@ -45,7 +45,6 @@ static const uint8_t INIT_CMDS[] = {
     0xDB, 0x40,  /* VCOMH deselect level */
     0xA4,        /* output follows RAM */
     0xA6,        /* normal display (not inverted) */
-    0xAF,        /* display on */
 };
 
 /* Standard 6×8 ASCII font, characters 0x20–0x7F.
@@ -189,7 +188,7 @@ static const uint8_t DEV_LINE_ROWS[MAX_DEV_LINES] = {2, 3, 4, 5};
 
 #define OLED_QUEUE_DEPTH 8
 
-typedef enum { OLED_EVT_TX, OLED_EVT_RX, OLED_EVT_STATUS } oled_evt_type_t;
+typedef enum { OLED_EVT_TX, OLED_EVT_RX, OLED_EVT_STATUS, OLED_EVT_ENABLE } oled_evt_type_t;
 
 typedef struct {
     oled_evt_type_t type;
@@ -197,6 +196,7 @@ typedef struct {
     char cmd_str[22];
     int  position_pct;
     int  rssi;
+    bool enabled;
 } oled_evt_t;
 
 static StaticQueue_t  s_queue_buf;
@@ -214,6 +214,7 @@ static char s_version_str[16] = "v0.00.00";
 
 static bool s_mqtt_connected = false;
 static int  s_net_state = 0;
+static bool s_enabled = true;
 
 /* Condensed header width: logo(12) + gap(4) + "control"(42) + gap(15) + MQTT(8) + gap(5) + network(8) = 94 */
 #define CONDENSED_W 94
@@ -544,6 +545,14 @@ static void oled_render_dev_line(int slot)
 
 static void process_event(const oled_evt_t *evt)
 {
+    if (evt->type == OLED_EVT_ENABLE) {
+        s_enabled = evt->enabled;
+        send_cmd(s_enabled ? 0xAF : 0xAE);
+        if (s_enabled) oled_redraw_all();
+        return;
+    }
+    if (!s_enabled) return;
+
     if (s_saver_active) {
         s_saver_active = false;
         oled_redraw_all();
@@ -582,6 +591,8 @@ static void process_event(const oled_evt_t *evt)
         oled_render_status_line(evt->cmd_str);
         s_status_time = evt->cmd_str[0] ? xTaskGetTickCount() : 0;
         break;
+    case OLED_EVT_ENABLE:
+        return;
     }
 }
 
@@ -746,12 +757,12 @@ static void oled_task(void *arg)
 
         TickType_t now = xTaskGetTickCount();
 
-        if ((now - last_cleanup) >= pdMS_TO_TICKS(2000)) {
+        if (s_enabled && (now - last_cleanup) >= pdMS_TO_TICKS(2000)) {
             last_cleanup = now;
             cleanup_oled(now);
         }
 
-        if ((now - last_net_update) >= pdMS_TO_TICKS(10000)) {
+        if (s_enabled && (now - last_net_update) >= pdMS_TO_TICKS(10000)) {
             last_net_update = now;
             update_network();
         }
@@ -760,8 +771,9 @@ static void oled_task(void *arg)
 
 /* ---- Public API ---- */
 
-esp_err_t oled_init(void)
+esp_err_t oled_init(bool enabled)
 {
+    s_enabled = enabled;
     /* Hardware reset — Heltec boards require this before I2C init */
     if (CONFIG_OLED_RST_GPIO >= 0) {
         gpio_set_direction(CONFIG_OLED_RST_GPIO, GPIO_MODE_OUTPUT);
@@ -838,6 +850,10 @@ esp_err_t oled_init(void)
     oled_draw_hline(6, 3);
     oled_init_version();
     oled_render_status_line("");
+    if (s_enabled) {
+        ret = send_cmd(0xAF);
+        if (ret != ESP_OK) return ret;
+    }
 
     /* Create queue and task — all I2C access goes through the task from here */
     s_queue = xQueueCreateStatic(OLED_QUEUE_DEPTH, sizeof(oled_evt_t),
@@ -847,6 +863,13 @@ esp_err_t oled_init(void)
 
     ESP_LOGI(TAG, "display init OK");
     return ESP_OK;
+}
+
+void oled_set_enabled(bool enabled)
+{
+    if (!s_queue) return;
+    oled_evt_t evt = { .type = OLED_EVT_ENABLE, .enabled = enabled };
+    xQueueSend(s_queue, &evt, 0);
 }
 
 void oled_show_tx(const char *cmd_name, const char *device_id)

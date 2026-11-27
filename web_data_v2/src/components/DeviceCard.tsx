@@ -104,7 +104,6 @@ export function DeviceCard({ device, sortableRef, sortableStyle, dragHandleProps
       style={sortableStyle}
     >
       <div className="warn-dot" />
-      <div className="moving-dot" />
 
       <div className="card-top">
         {dragHandleProps && (

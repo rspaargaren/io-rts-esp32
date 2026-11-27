@@ -192,16 +192,21 @@ namespace Helpers
 
     static esp_err_t provision_scan_handler(httpd_req_t *req)
     {
-        // Briefly switch to APSTA so scanning works while AP stays up
-        esp_wifi_set_mode(WIFI_MODE_APSTA);
-        vTaskDelay(pdMS_TO_TICKS(100)); // let mode settle
+        // Briefly switch to APSTA so scanning works while AP stays up. In fallback
+        // mode we are already APSTA and the STA is actively retrying the home
+        // router, so leave the mode alone.
+        if (!sIsFallback) {
+            esp_wifi_set_mode(WIFI_MODE_APSTA);
+            vTaskDelay(pdMS_TO_TICKS(100)); // let mode settle
+        }
 
         wifi_scan_config_t scan_cfg = {};
         scan_cfg.scan_type = WIFI_SCAN_TYPE_PASSIVE;
-        esp_wifi_scan_start(&scan_cfg, true); // blocking scan
+        esp_err_t scan_err = esp_wifi_scan_start(&scan_cfg, true); // blocking scan
 
         uint16_t ap_count = 0;
-        esp_wifi_scan_get_ap_num(&ap_count);
+        if (scan_err == ESP_OK) esp_wifi_scan_get_ap_num(&ap_count);
+        else ESP_LOGW(TAG, "scan failed (%s)", esp_err_to_name(scan_err));
         if (ap_count > 20) ap_count = 20;
 
         wifi_ap_record_t *records = new wifi_ap_record_t[ap_count > 0 ? ap_count : 1];
@@ -229,8 +234,10 @@ namespace Helpers
         buf[pos] = '\0';
         delete[] records;
 
-        // Switch back to pure AP mode
-        esp_wifi_set_mode(WIFI_MODE_AP);
+        // Switch back to pure AP mode — only in the no-credentials provisioning
+        // path. Doing this in fallback mode would tear down the STA interface and
+        // every subsequent reconnect attempt would fail until the AP times out.
+        if (!sIsFallback) esp_wifi_set_mode(WIFI_MODE_AP);
 
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);

@@ -23,7 +23,7 @@ namespace iohome
         return set_command(frame, CMD_IDENTIFY, data, sizeof(data));
     }
 
-    bool create_execute_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power, uint8_t position, bool quiet)
+    bool create_execute_request(IoFrame &frame, const uint8_t *own_node_id, const uint8_t *dst_node_id, bool is_low_power, uint8_t position, bool quiet, bool favorite_with_tilt)
     {
         // Initialize frame
         init_frame(frame, true, true, false, is_low_power);
@@ -55,6 +55,18 @@ namespace iohome
             data[4] = 0x00; // TBD (value sent by connectivity kit)
             data[5] = 0x00; // TBD (value sent by connectivity kit)
             param_len = 6;
+            if (position == CMD_PARAM_POSITION_FAVORITE && favorite_with_tilt)
+            {
+                // Devices with slats store the tilt as part of their "My" position.
+                // Without a functional parameter they only restore the height and
+                // keep the slats as they are after the move. Request the memorized
+                // tilt too (same 0x20 + 2-byte layout as the tilt command).
+                data[4] = 0x20;
+                data[5] = CMD_PARAM_POSITION_FAVORITE;
+                data[6] = 0x00;
+                data[7] = 0x00;
+                param_len = 8;
+            }
         }
 
         return set_command(frame, CMD_EXECUTE_REQUEST, data, param_len);

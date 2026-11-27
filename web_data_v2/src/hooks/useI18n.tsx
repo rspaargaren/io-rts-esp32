@@ -17,6 +17,7 @@ const DEFAULT_SUPPORTED = ["nl", "en", "de", "fr"];
 // Module-level cache shared across all useI18n() instances — survives component
 // unmount/remount so re-navigation never causes a translation flash.
 const langCache: Record<string, I18nDict> = {};
+const langRequests: Record<string, Promise<I18nDict> | undefined> = {};
 
 function getInitialLang(supported: string[]): string {
   try {
@@ -45,24 +46,27 @@ export default function useI18n(
 
   const loadLang = useCallback(async (lang: string): Promise<I18nDict> => {
     if (langCache[lang]) return langCache[lang];
+    if (langRequests[lang]) return langRequests[lang]!;
 
-    for (const url of candidatesFor(lang)) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) continue;
-        const json = await res.json();
-        if (json && typeof json === "object") {
-          langCache[lang] = json as I18nDict;
-          return langCache[lang];
-        }
+    langRequests[lang] = (async () => {
+      for (const url of candidatesFor(lang)) {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) continue;
+          const json = await res.json();
+          if (json && typeof json === "object") {
+            langCache[lang] = json as I18nDict;
+            return langCache[lang];
+          }
         } catch {
-        // try next
-        continue;
+          // try next
+        }
       }
-    }
 
-    langCache[lang] = {};
-    return {};
+      langCache[lang] = {};
+      return langCache[lang];
+    })();
+    return langRequests[lang]!;
   }, []);
 
   const interpolate = useCallback(

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <string>
 
 #include "esp_err.h"
@@ -92,7 +93,7 @@ namespace Helpers
         enum class MqttState { DISABLED, CONNECTING, CONNECTED, DISCONNECTED, ERROR };
         MqttState GetMqttState() const { return mMqttState; }
         const char *GetMqttStatusString() const;
-        void OnMqttError() { mMqttState = MqttState::ERROR; }
+        void OnMqttError() { mMqttConnected = false; mMqttState = MqttState::ERROR; }
 
     private:
         /// @brief Send controller device discovery message (reboot, config, management components)
@@ -103,6 +104,9 @@ namespace Helpers
 
         IoRts::IoRtsManager *mIoRtsManager;         // Pointer to IoRtsManager object
         bool mStarted;                              // true if client is started
+        // Serializes client create/start/destroy: StartMqttClient runs both from IoRtsManager and
+        // from the network event handlers (event-loop task). Recursive because Restart calls Start.
+        std::recursive_mutex mLifecycleMutex;
         bool mMqttConnected = false;                // true while broker connection is active
         MqttState mMqttState = MqttState::DISABLED; // current connection state for API/UI reporting
         // mIsIoHomePassive removed — use IoHomeConfig::isPassiveModeEnabled() for live reads
