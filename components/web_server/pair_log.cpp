@@ -73,7 +73,10 @@ static void split_legacy(long size)
         remove(LOG_PATH);
         return;
     }
-    long start = size - (long)(PART_COUNT - 1) * (PART_MAX_BYTES - 128); // margin for line ends
+    // Margin per part: fgets() returns at most COPY_CHUNK - 1 bytes, so a part never wastes more
+    // than that at its end. With this margin the older parts always hold everything copied, and
+    // the newest lines are never cut off.
+    long start = size - (long)(PART_COUNT - 1) * (PART_MAX_BYTES - (long)COPY_CHUNK);
     if (start > 0) {
         fseek(in, start, SEEK_SET);
         int c;
@@ -90,10 +93,12 @@ static void split_legacy(long size)
     while (fgets(line, sizeof(line), in)) {
         long len = (long)strlen(line);
         if (!out || part_size + len > PART_MAX_BYTES) {
-            if (out)
+            if (out) {
                 fclose(out);
+                out = nullptr; // never close it a second time after the loop
+            }
             if (parts == PART_COUNT - 1)
-                break; // should not happen thanks to the margin above
+                break; // cannot happen with the margin above; kept as a safety net
             out = fopen(("/devices/pairing_log.tmp" + std::to_string(parts) + ".txt").c_str(), "w");
             parts++;
             part_size = 0;

@@ -1,4 +1,5 @@
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "MqttHelpers.hpp"
 #include "MqttConfig.hpp"
 #include "IoHomeConfig.hpp"
@@ -1852,7 +1853,9 @@ namespace Helpers
         if (!mMqttConnected || mMqttClientHandle == nullptr)
             return;
         // Log lines are optional: don't let them take the last memory the board needs
-        if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < 8 * 1024)
+        // (same limits as the web log and syslog, see web_server_memory_low())
+        if (esp_get_free_heap_size() < 16 * 1024 ||
+            heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < 8 * 1024)
             return;
         std::string topic = mTopicPrefix + MQTT_CLIENT_LOG_TOPIC;
         esp_mqtt_client_publish(mMqttClientHandle, topic.c_str(), log.c_str(), 0, 0, 0);

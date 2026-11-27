@@ -3,8 +3,9 @@
 // Restart diagnostics: why the board last restarted, how long it had been running and how low
 // its free memory went before that, plus a boot counter. Costs no heap: the "previous run" data
 // lives in RTC memory that survives a restart (but not a power cut), the counter lives in NVS.
-// Also records the last failed memory allocation (size + task) and writes an hourly memory
-// line to the pairing log, so a slow leak shows up as a trend that survives the crash.
+// Also records the first failed memory allocation of a run (size + task) and writes a memory
+// line to the pairing log 10 minutes after start, then on a noticeable change and at least
+// once a day, so a slow leak shows up as a trend that survives the crash.
 
 #include <stdint.h>
 #include <stdbool.h>
